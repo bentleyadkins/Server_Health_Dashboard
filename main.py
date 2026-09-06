@@ -58,3 +58,22 @@ def add_server(server: ServerCreate):
             cursor.close()
     finally:
         connection.close()
+
+# System Health Metrics
+import os
+import psutil
+
+
+@app.get("/health")
+def get_system_health():
+    cpu_percent = psutil.cpu_percent(interval=1)
+    ram_percent = psutil.virtual_memory().percent
+
+    disk_path = os.path.abspath(os.sep)
+    disk_percent = psutil.disk_usage(disk_path).percent
+
+    return {
+        "cpu_percent": cpu_percent,
+        "ram_percent": ram_percent,
+        "disk_percent": disk_percent
+    }
