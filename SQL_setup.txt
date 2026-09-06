@@ -3,7 +3,7 @@ Health Dashboard
 
 
 
-paste into SQL query after proper naming 
+paste into SQL query section of phpmyadmin (xampp) after proper naming 
 
 servers	CREATE TABLE `servers` (
   `id` int(11) NOT NULL AUTO_INCREMENT,
