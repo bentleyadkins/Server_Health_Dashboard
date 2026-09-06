@@ -9,3 +9,15 @@ install "py -m pip install fastapi uvicorn mysql-connector-python" in cmd
 start the backend with "py -m uvicorn main:app --reload"
 
 Open http://127.0.0.1:8000/docs in your browser (placeholder for dashboard website)
+
+http://127.0.0.1:8000/servers   to show server query
+
+
+
+
+
+
+
+
+phpMyAdmin url 
+http://localhost/phpmyadmin/
