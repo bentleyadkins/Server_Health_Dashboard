@@ -21,6 +21,11 @@ py install 3.12.10
 .venv\Scripts\activate
 ```
 
+4. Run requirements.txt for packages
+```
+pip install -r requirements.txt
+```
+
 ### Linux Setup (Terminal)
 
 <!-- Add setup once VM's installed -->
