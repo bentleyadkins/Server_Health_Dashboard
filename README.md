@@ -13,12 +13,17 @@ py install 3.12.10
 
 2. Create the .venv
 ```
-py install 3.12.10
+py -3.12 -m venv .venv
 ```
 
 3. Activate .venv
 ```
 .venv\Scripts\activate
+```
+
+4. Run requirements.txt for packages
+```
+pip install -r requirements.txt
 ```
 
 ### Linux Setup (Terminal)
