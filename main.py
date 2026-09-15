@@ -5,6 +5,7 @@ import os
 import psutil
 import asyncio
 
+# Initalize the FastAPI 
 app = FastAPI()
 
 @app.get("/")
@@ -80,6 +81,11 @@ def get_system_health():
 
 # --- 1. Completed POST Endpoint ---
 class HealthLogCreate(BaseModel):
+    """
+    Pydantic uses a class as a way to know which variables need to be logged into
+    the health meterics table.
+    TODO: Add more meterics here to boost the performance of the LLM and data logged
+    """
     server_id: int
     cpu_percent: float
     ram_percent: float
@@ -108,11 +114,14 @@ def post_system_health(log_data: HealthLogCreate):
 
 # --- 2. The 5-Second Background Loop ---
 async def log_health(server_id: int):
-    """Runs in the background, logging laptop stats every 5 seconds."""
+    """
+    Runs in the background, logs the main server 
+    stats every 5 seconds.
+    """
     while True:
         try:
-            # Gather laptop stats
-            cpu = psutil.cpu_percent(interval=0.1)
+            # Gather main server stats
+            cpu = psutil.cpu_percent(interval=0.1) 
             ram = psutil.virtual_memory().percent
             disk_path = os.path.abspath(os.sep)
             disk = psutil.disk_usage(disk_path).percent
@@ -120,7 +129,12 @@ async def log_health(server_id: int):
             # Insert directly into DB (Assuming your laptop is server_id = 1)
             connection = get_connection()
             cursor = connection.cursor()
-            
+
+            """
+            TODO: Add more health meterics to get better data
+                  will need to see more for LLM to make better
+                  decision in the future for this project.
+            """
             sql = """
                 INSERT INTO server_health_log (server_id, cpu_percent, ram_percent, disk_percent)
                 VALUES (%s, %s, %s, %s)
@@ -136,11 +150,25 @@ async def log_health(server_id: int):
             print(f"Background logging error: {e}")
             
         # Wait 5 seconds without blocking FastAPI
-        await asyncio.sleep(5)
+        await asyncio.sleep(5) 
 
-@app.on_event("startup")
-async def startup_event():
-    """Starts the background task when FastAPI boots up."""
+async def lifespan(app: FastAPI):
+    """
+    This code starts as soon as FastAPI gets booted up. This will
+    create the tables for the database and 
+    """
+
     create_tables()
     laptop_server_id = get_or_create_main_server()
-    asyncio.create_task(log_health(laptop_server_id))
+    
+    # We assign the task to a variable so we can cleanly cancel it later
+    health_task = asyncio.create_task(log_health(laptop_server_id))
+    
+    yield  # <-- The FastAPI app runs during this yield
+    
+    # --- SHUTDOWN LOGIC ---
+    # When the app shuts down, the code resumes here
+    health_task.cancel()
+
+# Pass the lifespan function to your FastAPI app instance
+app = FastAPI(lifespan=lifespan)
