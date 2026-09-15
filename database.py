@@ -1,7 +1,7 @@
 import paramiko
 import socket
 import mysql.connector
-from mysql.connector import Error
+from mysql.connector import Error, IntegrityError
 
 def get_connection():
     return mysql.connector.connect(
@@ -34,16 +34,16 @@ def create_tables():
         """
 
         create_hdlog_table = """
-            CREATE TABLE IF NOT EXISTS `server_health_log` (
-                `id` int(11) NOT NULL AUTO_INCREMENT,
-                `log_time` timestamp DEFAULT CURRENT_TIMESTAMP,
-                `username` varchar(100) DEFAULT NULL,
-                `cpu_percent` float NOT NULL,
-                `ram_percent` float NOT NULL,
-                `disk_percent` float NOT NULL,
-                `net_if_stats` json DEFAULT NULL,
-                PRIMARY KEY (`id`)
-            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+        CREATE TABLE IF NOT EXISTS `server_health_log` (
+
+            `server_id` int NOT NULL,
+            `cpu_percent` float NOT NULL,
+            `ram_percent` float NOT NULL,
+            `disk_percent` float NOT NULL,
+            `logged_at` timestamp DEFAULT CURRENT_TIMESTAMP,
+
+            CONSTRAINT `fk_server_id` FOREIGN KEY (`server_id`) REFERENCES `servers`(`id`) ON DELETE CASCADE
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
         """
         
         cursor.execute(create_server_table)
@@ -60,6 +60,35 @@ def create_tables():
         if connection and connection.is_connected():
             cursor.close()
             connection.close()
+
+def get_or_create_main_server():
+    """Return the database ID for this laptop, creating its server row once."""
+    hostname = socket.gethostname()
+    connection = get_connection()
+    cursor = connection.cursor()
+
+    try:
+        cursor.execute(
+            "SELECT id FROM servers WHERE hostname = %s LIMIT 1",
+            (hostname,)
+        )
+        server = cursor.fetchone()
+
+        if server is None:
+            cursor.execute(
+                """
+                INSERT INTO servers (name, hostname, ssh_port, status)
+                VALUES (%s, %s, %s, %s)
+                """,
+                ("Laptop", hostname, 0, "Online")
+            )
+            connection.commit()
+            return cursor.lastrowid
+
+        return server[0]
+    finally:
+        cursor.close()
+        connection.close()
 
 if __name__ == "__main__":
     create_tables()
