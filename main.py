@@ -63,6 +63,16 @@ def add_server(server: ServerCreate):
 import os
 import psutil
 
+WARNING_THRESHOLD = 80
+CRITICAL_THRESHOLD = 90
+
+def get_status(percent):
+    if percent >= CRITICAL_THRESHOLD:
+        return "critical"
+    elif percent >= WARNING_THRESHOLD:
+        return "warning"
+    else:
+        return "healthy"
 
 @app.get("/health")
 def get_system_health():
