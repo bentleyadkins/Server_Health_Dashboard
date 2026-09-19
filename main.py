@@ -1,15 +1,23 @@
+from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
-from fastapi import FastAPI
 from database import get_connection
 
 app = FastAPI()
 
 
+class ServerCreate(BaseModel):
+    name: str
+    hostname: str
+    ssh_port: int = 22
+
+
+# Check that the API is running
 @app.get("/")
 def home():
     return {"message": "Health Dashboard API is running"}
 
 
+# View all saved servers
 @app.get("/servers")
 def get_servers():
     connection = get_connection()
@@ -23,12 +31,8 @@ def get_servers():
     finally:
         connection.close()
 
-class ServerCreate(BaseModel):
-    name: str
-    hostname: str
-    ssh_port: int = 22
 
-
+# Add a server
 @app.post("/servers", status_code=201)
 def add_server(server: ServerCreate):
     connection = get_connection()
@@ -53,6 +57,36 @@ def add_server(server: ServerCreate):
             return {
                 "message": "Server added successfully!",
                 "id": cursor.lastrowid
+            }
+        finally:
+            cursor.close()
+    finally:
+        connection.close()
+
+
+# Delete a server by its ID
+@app.delete("/servers/{server_id}")
+def delete_server(server_id: int):
+    connection = get_connection()
+    try:
+        cursor = connection.cursor()
+        try:
+            cursor.execute(
+                "DELETE FROM servers WHERE id = %s",
+                (server_id,)
+            )
+
+            if cursor.rowcount == 0:
+                raise HTTPException(
+                    status_code=404,
+                    detail="Server not found"
+                )
+
+            connection.commit()
+
+            return {
+                "message": "Server deleted successfully!",
+                "id": server_id
             }
         finally:
             cursor.close()
