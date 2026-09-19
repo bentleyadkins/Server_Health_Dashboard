@@ -158,16 +158,14 @@ async def lifespan(app: FastAPI):
     create the tables for the database and 
     """
 
-    create_tables()
-    laptop_server_id = get_or_create_main_server()
+    create_tables() # Create tables on startup
+    server_id = get_or_create_main_server() # "return server[0]"
     
-    # We assign the task to a variable so we can cleanly cancel it later
-    health_task = asyncio.create_task(log_health(laptop_server_id))
+    # TODO: Assigned as a variable for now for host server, will need to take multiple servers
+    health_task = asyncio.create_task(log_health(server_id))
+    yield  # FastAPI running
     
-    yield  # <-- The FastAPI app runs during this yield
-    
-    # --- SHUTDOWN LOGIC ---
-    # When the app shuts down, the code resumes here
+    # When app stops running, pause the logging meteric
     health_task.cancel()
 
 # Pass the lifespan function to your FastAPI app instance
