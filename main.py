@@ -1,6 +1,7 @@
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from database import get_connection
+from alerts import get_system_health
 
 app = FastAPI()
 
@@ -92,3 +93,9 @@ def delete_server(server_id: int):
             cursor.close()
     finally:
         connection.close()
+
+
+# View health readings from the computer running FastAPI
+@app.get("/health")
+def health():
+    return get_system_health()
