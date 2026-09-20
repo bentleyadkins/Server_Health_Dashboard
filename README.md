@@ -6,7 +6,13 @@ UTC Senior Capstone Project - A dashboard application that monitors the health m
 
 1. Download XAMPP for hosting the mySQL server on your local machine. If you already have a database you will need to change the parameters in database.py to make the connection.
 
+[XAMPP Download](https://www.apachefriends.org/download.html)
+
 2. Download Docker Desktop for your machine to host the Docker container.
+
+[Docker (Windows Download)](https://docs.docker.com/desktop/setup/install/windows-install/)
+
+[Docker (Linux Download)](https://docs.docker.com/desktop/setup/install/linux/)
 
 ## Quickstart/Docker Build
 
