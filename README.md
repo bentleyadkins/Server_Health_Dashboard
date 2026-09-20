@@ -1,6 +1,6 @@
-# Server_Health_Dashboard
+# Server Health Dashboard
 
-UTC Senior Capstone Project - A dashboard application that monitors the health meterics of servers using XAMPP, Docker, and FastAPI.
+UTC Senior Capstone Project - A dashboard application that monitors the health meterics of servers using XAMPP, Docker, and Python FastAPI package.
 
 ## Prerequistes
 
@@ -51,12 +51,12 @@ pip install -r requirements.txt
 py -m uvicorn main:app --reload
 ```
 
-6. Navigate to a browser and open the FastAPI. NOTE -> Ensure 127.0.0.1 is the host connection when debugging
+6. Navigate to a browser and open the FastAPI. NOTE -> Ensure 127.0.0.1 is the host connection for the database when debugging
 ```
 http://127.0.0.1:8000/
 ```
 
-### Linux Setup (Terminal)
+<!-- ### Linux Setup (Terminal) -->
 
 <!-- Add setup once VM's installed -->
 
