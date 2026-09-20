@@ -5,8 +5,24 @@ import os
 import psutil
 import asyncio
 
-# Initalize the FastAPI 
-app = FastAPI()
+async def lifespan(app: FastAPI):
+    """
+    This code starts as soon as FastAPI gets booted up. This will
+    create the tables for the database and 
+    """
+
+    create_tables() # Create tables on startup
+    server_id = get_or_create_main_server() # "return server[0]"
+    
+    # TODO: Assigned as a variable for now for host server, will need to take multiple servers
+    health_task = asyncio.create_task(log_health(server_id))
+    yield  # FastAPI running
+    
+    # When app stops running, pause the logging meteric
+    health_task.cancel()
+
+# Pass the lifespan function to your FastAPI app instance
+app = FastAPI(lifespan=lifespan)
 
 @app.get("/")
 def home():
@@ -60,10 +76,6 @@ def add_server(server: ServerCreate):
             cursor.close()
     finally:
         connection.close()
-
-# System Health Metrics
-import os
-import psutil
 
 WARNING_THRESHOLD = 80
 CRITICAL_THRESHOLD = 90
@@ -165,22 +177,3 @@ async def log_health(server_id: int):
             
         # Wait 5 seconds without blocking FastAPI
         await asyncio.sleep(5) 
-
-async def lifespan(app: FastAPI):
-    """
-    This code starts as soon as FastAPI gets booted up. This will
-    create the tables for the database and 
-    """
-
-    create_tables() # Create tables on startup
-    server_id = get_or_create_main_server() # "return server[0]"
-    
-    # TODO: Assigned as a variable for now for host server, will need to take multiple servers
-    health_task = asyncio.create_task(log_health(server_id))
-    yield  # FastAPI running
-    
-    # When app stops running, pause the logging meteric
-    health_task.cancel()
-
-# Pass the lifespan function to your FastAPI app instance
-app = FastAPI(lifespan=lifespan)
