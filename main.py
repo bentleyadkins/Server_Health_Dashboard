@@ -1,7 +1,8 @@
-from database import get_connection
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
+from database import get_connection
+import mysql.connector
 
 app = FastAPI()
 
@@ -50,7 +51,7 @@ HTML_TEMPLATE = """
     </button>
 
     <!-- Add Server Modal -->
-    <div class="modal fade" id="addServerModal" tab index="-1">
+    <div class="modal fade" id="addServerModal" tabindex="-1">
         <div class="modal-dialog">
             <div class="modal-content">
                 <div class="modal-header bg-primary text-white">
@@ -61,7 +62,7 @@ HTML_TEMPLATE = """
                     <form id="addServerForm">
                         <div class="mb-3">
                             <label class="form-label">Server Name *</label>
-                            <input type="text" class="form-control" id="inputName" required lengthen="3">
+                            <input type="text" class="form-control" id="inputName" required minlength="3">
                             <div class="invalid-feedback">Name must be at least 3 characters.</div>
                         </div>
                         <div class="mb-3">
@@ -91,7 +92,7 @@ HTML_TEMPLATE = """
             };
         }
 
-        // ----- Thresholds (from your sprint plan) -----
+        // ----- Thresholds (from sprint plan) -----
         const THRESHOLDS = {
             cpu_warning: 80,
             cpu_critical: 95,
@@ -122,6 +123,8 @@ HTML_TEMPLATE = """
                 const grid = document.getElementById('server-grid');
                 if (!servers || servers.length === 0) {
                     grid.innerHTML = `<div class="col-12 text-center text-muted">No servers registered. Click the + button to add one.</div>`;
+                    document.getElementById('global-alerts').innerHTML =
+                        `<div class="alert alert-info"><i class="fas fa-info-circle me-2"></i>No servers registered yet.</div>`;
                     return;
                 }
 
@@ -212,7 +215,18 @@ HTML_TEMPLATE = """
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ name, hostname, ssh_port })
                 });
-                const result = await response.json();
+
+                // Read as text first, then try to parse as JSON.
+                // This prevents the "Unexpected token 'I'" error when the
+                // backend returns a plain-text 500 page instead of JSON.
+                const raw = await response.text();
+                let result;
+                try {
+                    result = JSON.parse(raw);
+                } catch {
+                    result = { detail: raw.slice(0, 300) || 'Server returned a non-JSON response.' };
+                }
+
                 if (response.ok) {
                     feedback.innerHTML = '<div class="text-success">Server added successfully!</div>';
                     // Close modal after short delay
@@ -222,7 +236,7 @@ HTML_TEMPLATE = """
                         loadDashboard(); // refresh
                     }, 1000);
                 } else {
-                    feedback.innerHTML = `<div class="text-danger">Error: ${result.detail || 'Unknown error'}</div>`;
+                    feedback.innerHTML = `<div class="text-danger">Error ${response.status}: ${result.detail || 'Unknown error'}</div>`;
                 }
             } catch (err) {
                 feedback.innerHTML = `<div class="text-danger">Network error: ${err.message}</div>`;
@@ -247,7 +261,19 @@ def get_servers():
     try:
         cursor = connection.cursor(dictionary=True)
         try:
-            cursor.execute("SELECT * FROM servers")
+            # Aliases make the JSON keys lowercase so they match what
+            # the dashboard JavaScript expects (server.name, server.status).
+            cursor.execute("""
+                SELECT
+                    id,
+                    NAME       AS name,
+                    hostname,
+                    ssh_port,
+                    os_type,
+                    os_version,
+                    STATUS     AS status
+                FROM servers
+            """)
             return cursor.fetchall()
         finally:
             cursor.close()
@@ -261,25 +287,41 @@ class ServerCreate(BaseModel):
 
 @app.post("/servers", status_code=201)
 def add_server(server: ServerCreate):
-    connection = get_connection()
+    # Backend validation (mirrors the frontend checks)
+    if len(server.name.strip()) < 3:
+        raise HTTPException(status_code=400, detail="Name must be at least 3 characters.")
+    if not server.hostname.strip():
+        raise HTTPException(status_code=400, detail="Hostname is required.")
+    if not (1 <= server.ssh_port <= 65535):
+        raise HTTPException(status_code=400, detail="SSH port must be between 1 and 65535.")
+
+    connection = None
+    cursor = None
     try:
+        connection = get_connection()
         cursor = connection.cursor()
-        try:
-            sql = """
-                INSERT INTO servers (name, hostname, ssh_port, status)
-                VALUES (%s, %s, %s, %s)
-            """
-            values = (server.name, server.hostname, server.ssh_port, "Unknown")
-            cursor.execute(sql, values)
-            connection.commit()
-            return {
-                "message": "Server added successfully!",
-                "id": cursor.lastrowid
-            }
-        finally:
-            cursor.close()
+        # Column names must match the MySQL schema (NAME / STATUS uppercase).
+        sql = """
+            INSERT INTO servers (NAME, hostname, ssh_port, STATUS)
+            VALUES (%s, %s, %s, %s)
+        """
+        values = (server.name, server.hostname, server.ssh_port, "Unknown")
+        cursor.execute(sql, values)
+        connection.commit()
+        return {
+            "message": "Server added successfully!",
+            "id": cursor.lastrowid
+        }
+
+    except mysql.connector.Error as db_err:
+        # Return the real MySQL error as JSON so the frontend can display it
+        raise HTTPException(status_code=500, detail=f"Database error: {db_err.msg}")
+
     finally:
-        connection.close()
+        if cursor is not None:
+            cursor.close()
+        if connection is not None and connection.is_connected():
+            connection.close()
 
 # ---------- Dashboard Frontend Endpoint ----------
 @app.get("/dashboard", response_class=HTMLResponse)
