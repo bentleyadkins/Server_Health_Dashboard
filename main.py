@@ -1,34 +1,24 @@
+from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
-from fastapi import FastAPI
-from database import *
+from database import get_connection
 from alerts import get_system_health
-import os
-import psutil
-import asyncio
 
-async def lifespan(app: FastAPI):
-    """
-    This code starts as soon as FastAPI gets booted up. This will
-    create the tables for the database and 
-    """
+app = FastAPI()
 
-    create_tables() # Create tables on startup
-    server_id = get_or_create_main_server() # "return server[0]"
-    
-    # TODO: Assigned as a variable for now for host server, will need to take multiple servers
-    health_task = asyncio.create_task(log_health(server_id))
-    yield  # FastAPI running
-    
-    # When app stops running, pause the logging meteric
-    health_task.cancel()
 
-# Pass the lifespan function to your FastAPI app instance
-app = FastAPI(lifespan=lifespan)
+class ServerCreate(BaseModel):
+    name: str
+    hostname: str
+    ssh_port: int = 22
 
+
+# Check that the API is running
 @app.get("/")
 def home():
     return {"message": "Health Dashboard API is running"}
 
+
+# View all saved servers
 @app.get("/servers")
 def get_servers():
     connection = get_connection()
@@ -42,12 +32,8 @@ def get_servers():
     finally:
         connection.close()
 
-class ServerCreate(BaseModel):
-    name: str
-    hostname: str
-    ssh_port: int = 22
 
-
+# Add a server
 @app.post("/servers", status_code=201)
 def add_server(server: ServerCreate):
     connection = get_connection()
@@ -77,80 +63,39 @@ def add_server(server: ServerCreate):
             cursor.close()
     finally:
         connection.close()
-        
-@app.get("/health")
-def health():
-    return get_system_health()
 
-# --- 1. Completed POST Endpoint ---
-class HealthLogCreate(BaseModel):
-    """
-    Pydantic uses a class as a way to know which variables need to be logged into
-    the health meterics table.
-    TODO: Add more meterics here to boost the performance of the LLM and data logged
-    """
-    server_id: int
-    cpu_percent: float
-    ram_percent: float
-    disk_percent: float
 
-@app.post("/health")
-def post_system_health(log_data: HealthLogCreate):
+# Delete a server by its ID
+@app.delete("/servers/{server_id}")
+def delete_server(server_id: int):
     connection = get_connection()
     try:
         cursor = connection.cursor()
-        sql = """
-            INSERT INTO server_health_log (server_id, cpu_percent, ram_percent, disk_percent)
-            VALUES (%s, %s, %s, %s)
-        """
-        values = (log_data.server_id, log_data.cpu_percent, log_data.ram_percent, log_data.disk_percent)
-        cursor.execute(sql, values)
-        connection.commit()
-        return {"message": "Health metrics saved"}
-    except mysql.connector.Error as e:
-        print(f"Error: {e}")
-        return {"error": "Failed to log health data"}
-    finally:
-        if 'cursor' in locals():
+        try:
+            cursor.execute(
+                "DELETE FROM servers WHERE id = %s",
+                (server_id,)
+            )
+
+            if cursor.rowcount == 0:
+                raise HTTPException(
+                    status_code=404,
+                    detail="Server not found"
+                )
+
+            connection.commit()
+
+            return {
+                "message": "Server deleted successfully!",
+                "id": server_id
+            }
+        finally:
             cursor.close()
+    finally:
         connection.close()
 
-# --- 2. The 5-Second Background Loop ---
-async def log_health(server_id: int):
-    """
-    Runs in the background, logs the main server 
-    stats every 5 seconds.
-    """
-    while True:
-        try:
-            # Gather main server stats
-            cpu = psutil.cpu_percent(interval=0.1) 
-            ram = psutil.virtual_memory().percent
-            disk_path = os.path.abspath(os.sep)
-            disk = psutil.disk_usage(disk_path).percent
-            
-            # Insert directly into DB (Assuming your laptop is server_id = 1)
-            connection = get_connection()
-            cursor = connection.cursor()
 
-            """
-            TODO: Add more health meterics to get better data
-                  will need to see more for LLM to make better
-                  decision in the future for this project.
-            """
-            sql = """
-                INSERT INTO server_health_log (server_id, cpu_percent, ram_percent, disk_percent)
-                VALUES (%s, %s, %s, %s)
-            """
-            cursor.execute(sql, (server_id, cpu, ram, disk))
-            connection.commit()
-            
-            cursor.close()
-            connection.close()
-            print(f"Server ID: {server_id}, CPU {cpu}%, RAM {ram}%")
-            
-        except Exception as e:
-            print(f"Background logging error: {e}")
-            
-        # Wait 5 seconds without blocking FastAPI
-        await asyncio.sleep(5) 
+# View health readings from the computer running FastAPI
+@app.get("/health")
+def health():
+    return get_system_health()
