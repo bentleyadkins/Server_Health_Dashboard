@@ -1,12 +1,88 @@
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import HTMLResponse
+from fastapi import FastAPI, HTTPException, Request, Form
+from fastapi.responses import HTMLResponse, RedirectResponse
 from pydantic import BaseModel
+from starlette.middleware.sessions import SessionMiddleware
+
+from auth import verify_password
 from database import get_connection
+
 import mysql.connector
 
+# ---------- App + Session Middleware ----------
 app = FastAPI()
 
-# ---------- HTML Template for the Dashboard ----------
+# IMPORTANT: replace this with your own random 64-char hex string.
+# Generate one with: py -c "import secrets; print(secrets.token_hex(32))"
+SECRET_KEY = "22bb4190a37e51409deea40d2ecb1990803ae468d2dc8d6cdb71100344077386"
+
+app.add_middleware(SessionMiddleware, secret_key=SECRET_KEY)
+
+
+# ---------- HTML Template: Login Page ----------
+LOGIN_TEMPLATE = """
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Login - Health Dashboard</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    <style>
+        body {
+            background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .login-card {
+            max-width: 400px;
+            width: 100%;
+            border-radius: 12px;
+            box-shadow: 0 8px 24px rgba(0,0,0,0.3);
+            border: none;
+        }
+        .login-logo {
+            font-size: 2.5rem;
+            color: #0d6efd;
+        }
+    </style>
+</head>
+<body>
+    <div class="login-card card p-4">
+        <div class="text-center mb-3">
+            <i class="fas fa-server login-logo"></i>
+            <h4 class="mt-2 mb-0">Home Server Health</h4>
+            <p class="text-muted small">Sign in to continue</p>
+        </div>
+        %%ERROR%%
+        <form method="POST" action="/login">
+            <div class="mb-3">
+                <label class="form-label">Username</label>
+                <div class="input-group">
+                    <span class="input-group-text"><i class="fas fa-user"></i></span>
+                    <input type="text" class="form-control" name="username" required autofocus>
+                </div>
+            </div>
+            <div class="mb-3">
+                <label class="form-label">Password</label>
+                <div class="input-group">
+                    <span class="input-group-text"><i class="fas fa-lock"></i></span>
+                    <input type="password" class="form-control" name="password" required>
+                </div>
+            </div>
+            <button type="submit" class="btn btn-primary w-100">
+                <i class="fas fa-sign-in-alt me-2"></i>Sign In
+            </button>
+        </form>
+    </div>
+</body>
+</html>
+"""
+
+
+# ---------- HTML Template: Dashboard ----------
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="en">
@@ -32,7 +108,16 @@ HTML_TEMPLATE = """
     <nav class="navbar navbar-dark bg-dark">
         <div class="container-fluid">
             <span class="navbar-brand"><i class="fas fa-server me-2"></i>Home Server Health</span>
-            <span class="navbar-text text-light" id="live-status"><i class="fas fa-circle text-success"></i> Live</span>
+            <div class="d-flex align-items-center gap-2">
+                <span class="navbar-text text-light small">
+                    <i class="fas fa-circle text-success me-1"></i>Live
+                </span>
+                <form method="POST" action="/logout" class="d-inline mb-0">
+                    <button type="submit" class="btn btn-outline-light btn-sm">
+                        <i class="fas fa-sign-out-alt me-1"></i>Logout
+                    </button>
+                </form>
+            </div>
         </div>
     </nav>
 
@@ -45,12 +130,10 @@ HTML_TEMPLATE = """
         </div>
     </div>
 
-    <!-- Floating Add Button (opens modal) -->
     <button class="btn btn-primary btn-lg rounded-circle add-btn" data-bs-toggle="modal" data-bs-target="#addServerModal">
         <i class="fas fa-plus"></i>
     </button>
 
-    <!-- Add Server Modal -->
     <div class="modal fade" id="addServerModal" tabindex="-1">
         <div class="modal-dialog">
             <div class="modal-content">
@@ -83,7 +166,6 @@ HTML_TEMPLATE = """
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     <script>
-        // ----- Helper: Generate mock metrics (replace later with real SSH data) -----
         function generateMetrics() {
             return {
                 cpu: Math.round(Math.random() * 100),
@@ -92,7 +174,6 @@ HTML_TEMPLATE = """
             };
         }
 
-        // ----- Thresholds (from sprint plan) -----
         const THRESHOLDS = {
             cpu_warning: 80,
             cpu_critical: 95,
@@ -113,10 +194,13 @@ HTML_TEMPLATE = """
             return alerts;
         }
 
-        // ----- Load and render servers -----
         async function loadDashboard() {
             try {
                 const response = await fetch('/servers');
+                if (response.status === 401) {
+                    window.location.href = '/login';
+                    return;
+                }
                 if (!response.ok) throw new Error('Failed to fetch servers');
                 const servers = await response.json();
 
@@ -177,7 +261,6 @@ HTML_TEMPLATE = """
 
                 grid.innerHTML = cardsHtml;
 
-                // Global alert summary
                 const globalDiv = document.getElementById('global-alerts');
                 if (allAlerts.length) {
                     globalDiv.innerHTML = `<div class="alert alert-warning"><i class="fas fa-exclamation-triangle me-2"></i>${allAlerts.length} alert(s) detected.</div>`;
@@ -189,7 +272,6 @@ HTML_TEMPLATE = """
             }
         }
 
-        // ----- Add Server via Modal (uses your existing POST /servers) -----
         document.getElementById('addServerForm').addEventListener('submit', async function(e) {
             e.preventDefault();
             const name = document.getElementById('inputName').value.trim();
@@ -199,7 +281,6 @@ HTML_TEMPLATE = """
             const feedback = document.getElementById('formFeedback');
             feedback.innerHTML = '';
 
-            // Validate (simple frontend check)
             if (name.length < 3) {
                 feedback.innerHTML = '<div class="text-danger">Name must be at least 3 characters.</div>';
                 return;
@@ -216,9 +297,11 @@ HTML_TEMPLATE = """
                     body: JSON.stringify({ name, hostname, ssh_port })
                 });
 
-                // Read as text first, then try to parse as JSON.
-                // This prevents the "Unexpected token 'I'" error when the
-                // backend returns a plain-text 500 page instead of JSON.
+                if (response.status === 401) {
+                    window.location.href = '/login';
+                    return;
+                }
+
                 const raw = await response.text();
                 let result;
                 try {
@@ -229,11 +312,10 @@ HTML_TEMPLATE = """
 
                 if (response.ok) {
                     feedback.innerHTML = '<div class="text-success">Server added successfully!</div>';
-                    // Close modal after short delay
                     setTimeout(() => {
                         const modal = bootstrap.Modal.getInstance(document.getElementById('addServerModal'));
                         modal.hide();
-                        loadDashboard(); // refresh
+                        loadDashboard();
                     }, 1000);
                 } else {
                     feedback.innerHTML = `<div class="text-danger">Error ${response.status}: ${result.detail || 'Unknown error'}</div>`;
@@ -243,26 +325,81 @@ HTML_TEMPLATE = """
             }
         });
 
-        // Load on page load
         document.addEventListener('DOMContentLoaded', loadDashboard);
     </script>
 </body>
 </html>
 """
 
-# ---------- Existing API Endpoints ----------
+
+# ---------- Auth helper ----------
+def require_login(request: Request):
+    """Raise a redirect if the user isn't logged in. Returns the username otherwise."""
+    user = request.session.get("user")
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    return user
+
+
+# ---------- Auth Routes ----------
+@app.get("/login", response_class=HTMLResponse)
+def login_page(request: Request):
+    # Already logged in? Go to dashboard.
+    if request.session.get("user"):
+        return RedirectResponse(url="/dashboard", status_code=302)
+    return LOGIN_TEMPLATE.replace("%%ERROR%%", "")
+
+
+@app.post("/login")
+def login_submit(request: Request, username: str = Form(...), password: str = Form(...)):
+    connection = get_connection()
+    user_row = None
+    try:
+        cursor = connection.cursor(dictionary=True)
+        try:
+            cursor.execute(
+                "SELECT id, username, password_hash FROM users WHERE username = %s",
+                (username,),
+            )
+            user_row = cursor.fetchone()
+        finally:
+            cursor.close()
+    finally:
+        connection.close()
+
+    if user_row and verify_password(password, user_row["password_hash"]):
+        request.session["user"] = user_row["username"]
+        return RedirectResponse(url="/dashboard", status_code=302)
+
+    # Generic error — do not reveal whether the username exists
+    error_html = (
+        '<div class="alert alert-danger mb-3">'
+        '<i class="fas fa-exclamation-triangle me-2"></i>'
+        "Invalid username or password."
+        "</div>"
+    )
+    return HTMLResponse(LOGIN_TEMPLATE.replace("%%ERROR%%", error_html), status_code=401)
+
+
+@app.post("/logout")
+def logout(request: Request):
+    request.session.clear()
+    return RedirectResponse(url="/login", status_code=302)
+
+
+# ---------- API Endpoints (now protected) ----------
 @app.get("/")
-def home():
+def home(request: Request):
     return {"message": "Health Dashboard API is running"}
 
+
 @app.get("/servers")
-def get_servers():
+def get_servers(request: Request):
+    require_login(request)
     connection = get_connection()
     try:
         cursor = connection.cursor(dictionary=True)
         try:
-            # Aliases make the JSON keys lowercase so they match what
-            # the dashboard JavaScript expects (server.name, server.status).
             cursor.execute("""
                 SELECT
                     id,
@@ -280,14 +417,17 @@ def get_servers():
     finally:
         connection.close()
 
+
 class ServerCreate(BaseModel):
     name: str
     hostname: str
     ssh_port: int = 22
 
+
 @app.post("/servers", status_code=201)
-def add_server(server: ServerCreate):
-    # Backend validation (mirrors the frontend checks)
+def add_server(request: Request, server: ServerCreate):
+    require_login(request)
+
     if len(server.name.strip()) < 3:
         raise HTTPException(status_code=400, detail="Name must be at least 3 characters.")
     if not server.hostname.strip():
@@ -300,7 +440,6 @@ def add_server(server: ServerCreate):
     try:
         connection = get_connection()
         cursor = connection.cursor()
-        # Column names must match the MySQL schema (NAME / STATUS uppercase).
         sql = """
             INSERT INTO servers (NAME, hostname, ssh_port, STATUS)
             VALUES (%s, %s, %s, %s)
@@ -308,22 +447,19 @@ def add_server(server: ServerCreate):
         values = (server.name, server.hostname, server.ssh_port, "Unknown")
         cursor.execute(sql, values)
         connection.commit()
-        return {
-            "message": "Server added successfully!",
-            "id": cursor.lastrowid
-        }
-
+        return {"message": "Server added successfully!", "id": cursor.lastrowid}
     except mysql.connector.Error as db_err:
-        # Return the real MySQL error as JSON so the frontend can display it
         raise HTTPException(status_code=500, detail=f"Database error: {db_err.msg}")
-
     finally:
         if cursor is not None:
             cursor.close()
         if connection is not None and connection.is_connected():
             connection.close()
 
-# ---------- Dashboard Frontend Endpoint ----------
+
+# ---------- Protected Dashboard ----------
 @app.get("/dashboard", response_class=HTMLResponse)
-def dashboard_page():
+def dashboard_page(request: Request):
+    if not request.session.get("user"):
+        return RedirectResponse(url="/login", status_code=302)
     return HTML_TEMPLATE
