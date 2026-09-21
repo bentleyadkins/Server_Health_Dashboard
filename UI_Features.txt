@@ -1,0 +1,4 @@
+- Admin Page
+- LLM Text Box
+- Optional SSH Port/ Port
+- Implement Add/ Delete
