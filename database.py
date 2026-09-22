@@ -12,7 +12,7 @@ def get_connection():
         host="127.0.0.1", 
         user="root",
         password="",
-        database="Health_Dashboard"
+        database="health dashboard"
     )
 
 def create_tables():
