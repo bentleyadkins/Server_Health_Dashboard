@@ -1,5 +1,5 @@
 from pydantic import BaseModel
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from database import *
 import os
 import psutil
@@ -77,16 +77,34 @@ def add_server(server: ServerCreate):
     finally:
         connection.close()
 
-WARNING_THRESHOLD = 80
-CRITICAL_THRESHOLD = 90
+# Delete a server by its ID
+@app.delete("/servers/{server_id}")
+def delete_server(server_id: int):
+    connection = get_connection()
+    try:
+        cursor = connection.cursor()
+        try:
+            cursor.execute(
+                "DELETE FROM servers WHERE id = %s",
+                (server_id,)
+            )
 
-def get_status(percent):
-    if percent >= CRITICAL_THRESHOLD:
-        return "critical"
-    elif percent >= WARNING_THRESHOLD:
-        return "warning"
-    else:
-        return "healthy"
+            if cursor.rowcount == 0:
+                raise HTTPException(
+                    status_code=404,
+                    detail="Server not found"
+                )
+
+            connection.commit()
+
+            return {
+                "message": "Server deleted successfully!",
+                "id": server_id
+            }
+        finally:
+            cursor.close()
+    finally:
+        connection.close()
 
 @app.get("/health")
 def get_system_health():

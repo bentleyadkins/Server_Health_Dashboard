@@ -7,7 +7,9 @@ def get_connection():
     Make connection to Health_Dashboard database
     """
     return mysql.connector.connect(
-        host="host.docker.internal", # Change back to 127.0.0.1 when testing/debugging
+        # Change to 127.0.0.1 when testing/debugging
+        # Change to host.docker.internal when in production
+        host="127.0.0.1", 
         user="root",
         password="",
         database="Health_Dashboard"
