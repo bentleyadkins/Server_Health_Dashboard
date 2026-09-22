@@ -13,7 +13,7 @@ app = FastAPI()
 
 # IMPORTANT: replace this with your own random 64-char hex string.
 # Generate one with: py -c "import secrets; print(secrets.token_hex(32))"
-SECRET_KEY = "22bb4190a37e51409deea40d2ecb1990803ae468d2dc8d6cdb71100344077386"
+SECRET_KEY = "6a6e34449fec654e25d4e03954a4c542ff7cfe1bb592ca95a1f319de4863011b"
 
 app.add_middleware(SessionMiddleware, secret_key=SECRET_KEY)
 
@@ -101,6 +101,7 @@ HTML_TEMPLATE = """
         .status-badge { font-size: 0.75rem; }
         .add-btn { position: fixed; bottom: 30px; right: 30px; z-index: 1000; }
         .alert-box { padding: 8px 12px; border-radius: 6px; }
+        .delete-btn { padding: 2px 8px; font-size: 0.75rem; }
     </style>
 </head>
 <body>
@@ -227,9 +228,17 @@ HTML_TEMPLATE = """
                     cardsHtml += `
                         <div class="col-md-4 mb-3">
                             <div class="card ${statusClass}">
-                                <div class="card-header d-flex justify-content-between">
+                                <div class="card-header d-flex justify-content-between align-items-center">
                                     <span><i class="fas fa-hdd me-2"></i>${server.name}</span>
-                                    <span class="badge ${isOnline ? 'bg-success' : 'bg-danger'} status-badge">${statusBadge.toUpperCase()}</span>
+                                    <div class="d-flex align-items-center gap-2">
+                                        <span class="badge ${isOnline ? 'bg-success' : 'bg-danger'} status-badge">${statusBadge.toUpperCase()}</span>
+                                        <button class="btn btn-outline-danger delete-btn"
+                                                data-id="${server.id}"
+                                                data-name="${server.name}"
+                                                title="Delete server">
+                                            <i class="fas fa-trash"></i>
+                                        </button>
+                                    </div>
                                 </div>
                                 <div class="card-body">
                                     <p><i class="fas fa-microchip"></i> ${server.hostname} (port ${server.ssh_port})</p>
@@ -325,6 +334,44 @@ HTML_TEMPLATE = """
             }
         });
 
+        // ----- Delete server handler (event delegation) -----
+        document.addEventListener('click', async function(e) {
+            const btn = e.target.closest('.delete-btn');
+            if (!btn) return;
+
+            const id = btn.dataset.id;
+            const name = btn.dataset.name;
+
+            if (!confirm(`Delete server "${name}"? This cannot be undone.`)) {
+                return;
+            }
+
+            try {
+                const response = await fetch(`/servers/${id}`, { method: 'DELETE' });
+
+                if (response.status === 401) {
+                    window.location.href = '/login';
+                    return;
+                }
+
+                const raw = await response.text();
+                let result;
+                try {
+                    result = JSON.parse(raw);
+                } catch {
+                    result = { detail: raw.slice(0, 300) || 'Server returned a non-JSON response.' };
+                }
+
+                if (response.ok) {
+                    loadDashboard();
+                } else {
+                    alert(`Error ${response.status}: ${result.detail || 'Unknown error'}`);
+                }
+            } catch (err) {
+                alert(`Network error: ${err.message}`);
+            }
+        });
+
         document.addEventListener('DOMContentLoaded', loadDashboard);
     </script>
 </body>
@@ -344,7 +391,6 @@ def require_login(request: Request):
 # ---------- Auth Routes ----------
 @app.get("/login", response_class=HTMLResponse)
 def login_page(request: Request):
-    # Already logged in? Go to dashboard.
     if request.session.get("user"):
         return RedirectResponse(url="/dashboard", status_code=302)
     return LOGIN_TEMPLATE.replace("%%ERROR%%", "")
@@ -371,7 +417,6 @@ def login_submit(request: Request, username: str = Form(...), password: str = Fo
         request.session["user"] = user_row["username"]
         return RedirectResponse(url="/dashboard", status_code=302)
 
-    # Generic error — do not reveal whether the username exists
     error_html = (
         '<div class="alert alert-danger mb-3">'
         '<i class="fas fa-exclamation-triangle me-2"></i>'
@@ -387,7 +432,7 @@ def logout(request: Request):
     return RedirectResponse(url="/login", status_code=302)
 
 
-# ---------- API Endpoints (now protected) ----------
+# ---------- API Endpoints (protected) ----------
 @app.get("/")
 def home(request: Request):
     return {"message": "Health Dashboard API is running"}
@@ -448,6 +493,31 @@ def add_server(request: Request, server: ServerCreate):
         cursor.execute(sql, values)
         connection.commit()
         return {"message": "Server added successfully!", "id": cursor.lastrowid}
+    except mysql.connector.Error as db_err:
+        raise HTTPException(status_code=500, detail=f"Database error: {db_err.msg}")
+    finally:
+        if cursor is not None:
+            cursor.close()
+        if connection is not None and connection.is_connected():
+            connection.close()
+
+
+@app.delete("/servers/{server_id}")
+def delete_server(server_id: int, request: Request):
+    require_login(request)
+
+    connection = None
+    cursor = None
+    try:
+        connection = get_connection()
+        cursor = connection.cursor()
+        cursor.execute("DELETE FROM servers WHERE id = %s", (server_id,))
+        connection.commit()
+
+        if cursor.rowcount == 0:
+            raise HTTPException(status_code=404, detail="Server not found.")
+
+        return {"message": f"Server {server_id} deleted."}
     except mysql.connector.Error as db_err:
         raise HTTPException(status_code=500, detail=f"Database error: {db_err.msg}")
     finally:
