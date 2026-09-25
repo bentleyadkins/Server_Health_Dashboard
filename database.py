@@ -31,9 +31,6 @@ def create_tables():
                 `NAME` varchar(100) NOT NULL,
                 `hostname` varchar(255) NOT NULL,
                 `ssh_port` int(11) DEFAULT 22,
-                `os_type` varchar(50) DEFAULT NULL,
-                `os_version` varchar(100) DEFAULT NULL,
-                `STATUS` varchar(30) DEFAULT NULL,
                 PRIMARY KEY (`id`)
             ) ENGINE=InnoDB AUTO_INCREMENT=5 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
         """
@@ -48,9 +45,18 @@ def create_tables():
             CONSTRAINT `fk_server_id` FOREIGN KEY (`server_id`) REFERENCES `servers`(`id`) ON DELETE CASCADE
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
         """
+
+        create_users_table = """
+        CREATE TABLE IF NOT EXISTS `users` (
+            `id` int NOT NULL,
+            `username` VARCHAR(50) NOT NULL,
+            `password_hash` VARCHAR(255) NOT NULL
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+        """
         
         cursor.execute(create_server_table)
         cursor.execute(create_hdlog_table)
+        cursor.execute(create_users_table)
         
         connection.commit() # Publish the changes to the database
         print("Schemas created successfully.")
@@ -87,10 +93,10 @@ def get_or_create_main_server():
             # If the host server has been created yet, insert into servers table
             cursor.execute(
                 """
-                INSERT INTO servers (name, hostname, ssh_port, status)
-                VALUES (%s, %s, %s, %s)
+                INSERT INTO servers (name, hostname, ssh_port)
+                VALUES (%s, %s, %s)
                 """,
-                ("Server", hostname, 0, "Online") 
+                ("Server", hostname, 22) 
                 # TODO: Arbitary Values, need to pull variables in place
             )
             connection.commit()
