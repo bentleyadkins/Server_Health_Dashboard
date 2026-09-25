@@ -597,42 +597,36 @@ class HealthLogCreate(BaseModel):
     ram_percent: float
     disk_percent: float
 
-@app.post("/health")
-def post_system_health(log_data: HealthLogCreate):
-    connection = get_connection()
-    try:
-        cursor = connection.cursor()
+async def log_health(server_id: int):
+    """Background task logging server health metrics every 5 seconds."""
+    while True:
         try:
-            cursor.execute(
-                "DELETE FROM servers WHERE id = %s",
-                (server_id,)
-            )
+            cpu = psutil.cpu_percent(interval=0.1)
+            ram = psutil.virtual_memory().percent
+            disk_path = os.path.abspath(os.sep)
+            disk = psutil.disk_usage(disk_path).percent
 
-            if cursor.rowcount == 0:
-                raise HTTPException(
-                    status_code=404,
-                    detail="Server not found"
-                )
+            connection = get_connection()
+            cursor = connection.cursor()
 
+            sql = """
+                INSERT INTO server_health_log (server_id, cpu_percent, ram_percent, disk_percent)
+                VALUES (%s, %s, %s, %s)
+            """
+            cursor.execute(sql, (server_id, cpu, ram, disk))
             connection.commit()
 
-            return {
-                "message": "Server deleted successfully!",
-                "id": server_id
-            }
-        finally:
             cursor.close()
             connection.close()
             print(f"Server ID: {server_id}, CPU {cpu}%, RAM {ram}%")
-            
+
         except Exception as e:
             print(f"Background logging error: {e}")
-            
-        # Wait 5 seconds without blocking FastAPI
-        await asyncio.sleep(5) 
+
+        await asyncio.sleep(5)
 
 
-# ---------- Protected Dashboard ----------
+# ---------- Protected Dashboard Page ----------
 @app.get("/dashboard", response_class=HTMLResponse)
 def dashboard_page(request: Request):
     if not request.session.get("user"):
