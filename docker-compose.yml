@@ -1,0 +1,19 @@
+version: '3.8' # Supported version
+
+services:
+  db:
+    image: mysql:8.0 # Docker mySQL 8.0 downloaded from dockerhub
+    container_name: mysql_health_dashboard
+    restart: always # Always 
+    environment:
+      MYSQL_ROOT_PASSWORD: root # mysql.connector user
+      MYSQL_DATABASE: health_dashboard
+      MYSQL_USER: user
+      MYSQL_PASSWORD: root # mysql.connector password
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+
+volumes:
+  mysql_data:
