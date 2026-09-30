@@ -8,11 +8,11 @@ def get_connection():
     """
     return mysql.connector.connect(
         # Change to 127.0.0.1 when testing/debugging
-        # Change to host.docker.internal when in production
+        # Change to localhost when in production with docker
         host="127.0.0.1", 
         user="root",
-        password="",
-        database="health dashboard"
+        password="root",
+        database="health_dashboard"
     )
 
 def create_tables():

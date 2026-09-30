@@ -28,6 +28,11 @@ docker build -t server_heath_dashboard .
 docker run -d --name server_health_dashboard -p 8000:8000 server_health_dashboard
 ```
 
+3. This creates a docker service image spinning up the mysql database
+```
+docker compose up -d
+```
+
 ## Development, Testing, Debugging
 
 ### Windows Setup (Command Prompt)
