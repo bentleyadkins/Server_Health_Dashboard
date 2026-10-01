@@ -7,10 +7,10 @@ def get_connection():
     Make connection to Health_Dashboard database
     """
     return mysql.connector.connect(
-        host="host.docker.internal", # Change back to 127.0.0.1 when testing/debugging
-        user="root",
-        password="",
-        database="Health_Dashboard"
+        host="127.0.0.1",
+        user="user",
+        password="root",
+        database="health_dashboard"
     )
 
 def create_tables():
@@ -46,9 +46,18 @@ def create_tables():
             CONSTRAINT `fk_server_id` FOREIGN KEY (`server_id`) REFERENCES `servers`(`id`) ON DELETE CASCADE
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
         """
-        
+        create_users_table = """
+        CREATE TABLE IF NOT EXISTS `users` (
+            `id` int NOT NULL AUTO_INCREMENT,
+            `username` varchar(50) NOT NULL UNIQUE,
+            `password_hash` varchar(255) NOT NULL,
+            `salt` varchar(255) NOT NULL,
+            PRIMARY KEY (`id`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+        """
         cursor.execute(create_server_table)
         cursor.execute(create_hdlog_table)
+        cursor.execute(create_users_table)
         
         connection.commit() # Publish the changes to the database
         print("Schemas created successfully.")

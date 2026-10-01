@@ -5,6 +5,7 @@ from alerts import get_system_health
 import os
 import psutil
 import asyncio
+from login import router as login_router
 
 async def lifespan(app: FastAPI):
     """
@@ -24,6 +25,7 @@ async def lifespan(app: FastAPI):
 
 # Pass the lifespan function to your FastAPI app instance
 app = FastAPI(lifespan=lifespan)
+app.include_router(login_router)
 
 @app.get("/")
 def home():
