@@ -9,6 +9,7 @@ from database import *
 import os
 import psutil
 import asyncio
+from login import router as login_router
 import mysql.connector
 
 # IMPORTANT: replace this with your own random 64-char hex string.
@@ -395,6 +396,7 @@ async def lifespan(app: FastAPI):
 
 # Pass the lifespan function to your FastAPI app instance
 app = FastAPI(lifespan=lifespan)
+app.include_router(login_router)
 
 # Creation of the Secret key 
 app.add_middleware(SessionMiddleware, secret_key=SECRET_KEY)
