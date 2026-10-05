@@ -3,7 +3,7 @@ from fastapi import FastAPI, HTTPException, Request, Form
 from fastapi.responses import HTMLResponse, RedirectResponse
 from starlette.middleware.sessions import SessionMiddleware
 from auth import verify_password
-from login import router as login_router
+
 
 from database import *
 import os
