@@ -7,7 +7,9 @@ def get_connection():
     Make connection to Health_Dashboard database
     """
     return mysql.connector.connect(
-        host="127.0.0.1",
+        # Change to 127.0.0.1 when testing/debugging
+        # Change to localhost when in production with docker
+        host="127.0.0.1", 
         user="user",
         password="root",
         database="health_dashboard"
@@ -29,9 +31,6 @@ def create_tables():
                 `NAME` varchar(100) NOT NULL,
                 `hostname` varchar(255) NOT NULL,
                 `ssh_port` int(11) DEFAULT 22,
-                `os_type` varchar(50) DEFAULT NULL,
-                `os_version` varchar(100) DEFAULT NULL,
-                `STATUS` varchar(30) DEFAULT NULL,
                 PRIMARY KEY (`id`)
             ) ENGINE=InnoDB AUTO_INCREMENT=5 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
         """
@@ -94,10 +93,10 @@ def get_or_create_main_server():
             # If the host server has been created yet, insert into servers table
             cursor.execute(
                 """
-                INSERT INTO servers (name, hostname, ssh_port, status)
-                VALUES (%s, %s, %s, %s)
+                INSERT INTO servers (name, hostname, ssh_port)
+                VALUES (%s, %s, %s)
                 """,
-                ("Server", hostname, 0, "Online") 
+                ("Server", hostname, 22) 
                 # TODO: Arbitary Values, need to pull variables in place
             )
             connection.commit()
