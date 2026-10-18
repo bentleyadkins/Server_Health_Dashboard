@@ -7,7 +7,9 @@ from auth import verify_password
 
 from database import *
 import os
+from fastapi import Form
 import psutil
+from ssh_monitor import get_remote_health, SSHMonitorError
 import asyncio
 from login import router as login_router
 import mysql.connector
@@ -396,7 +398,7 @@ async def lifespan(app: FastAPI):
 
 # Pass the lifespan function to your FastAPI app instance
 app = FastAPI(lifespan=lifespan)
-app.include_router(login_router)
+#app.include_router(login_router)
 
 # Creation of the Secret key 
 app.add_middleware(SessionMiddleware, secret_key=SECRET_KEY)
@@ -429,7 +431,7 @@ def login_submit(request: Request, username: str = Form(...), password: str = Fo
         cursor = connection.cursor(dictionary=True)
         try:
             cursor.execute(
-                "SELECT id, username, password_hash FROM users WHERE username = %s",
+                "SELECT id, username, password_hash, salt FROM users WHERE username = %s",
                 (username,),
             )
             user_row = cursor.fetchone()
@@ -438,9 +440,13 @@ def login_submit(request: Request, username: str = Form(...), password: str = Fo
     finally:
         connection.close()
 
-    if user_row and verify_password(password, user_row["password_hash"]):
+    if user_row and verify_password(
+    password,
+    user_row["salt"],
+    user_row["password_hash"]
+    ):
         request.session["user"] = user_row["username"]
-        return RedirectResponse(url="/dashboard", status_code=302)
+        return RedirectResponse(url="/dashboard", status_code=303)
 
     error_html = (
         '<div class="alert alert-danger mb-3">'
@@ -587,6 +593,33 @@ def get_system_health():
         "ram_percent": ram_percent,
         "disk_percent": disk_percent
     }
+
+@app.get("/remote-health")
+def get_remote_system_health(request: Request):
+    require_login(request)
+
+    hostname = os.environ.get("SSH_HOST")
+    username = os.environ.get("SSH_USER")
+    port = int(os.environ.get("SSH_PORT", "22"))
+
+    if not hostname or not username:
+        raise HTTPException(
+            status_code=500,
+            detail="SSH_HOST and SSH_USER are not configured"
+        )
+
+    try:
+        return get_remote_health(
+            hostname=hostname,
+            username=username,
+            port=port
+        )
+    except SSHMonitorError as e:
+        print(f"Remote monitoring error: {e}")
+        raise HTTPException(
+            status_code=503,
+            detail="Unable to collect remote server metrics"
+        )
 
 # --- 1. Completed POST Endpoint ---
 class HealthLogCreate(BaseModel):
