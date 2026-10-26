@@ -10,7 +10,7 @@ def get_connection():
         # Change to 127.0.0.1 when testing/debugging
         # Change to localhost when in production with docker
         host="127.0.0.1", 
-        user="root",
+        user="user",
         password="root",
         database="health_dashboard"
     )
@@ -45,15 +45,15 @@ def create_tables():
             CONSTRAINT `fk_server_id` FOREIGN KEY (`server_id`) REFERENCES `servers`(`id`) ON DELETE CASCADE
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
         """
-
         create_users_table = """
         CREATE TABLE IF NOT EXISTS `users` (
-            `id` int NOT NULL,
-            `username` VARCHAR(50) NOT NULL,
-            `password_hash` VARCHAR(255) NOT NULL
+            `id` int NOT NULL AUTO_INCREMENT,
+            `username` varchar(50) NOT NULL UNIQUE,
+            `password_hash` varchar(255) NOT NULL,
+            `salt` varchar(255) NOT NULL,
+            PRIMARY KEY (`id`)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
         """
-        
         cursor.execute(create_server_table)
         cursor.execute(create_hdlog_table)
         cursor.execute(create_users_table)
