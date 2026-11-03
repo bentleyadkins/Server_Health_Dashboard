@@ -217,8 +217,40 @@ HTML_TEMPLATE = """
                 let cardsHtml = '';
                 let allAlerts = [];
 
-                servers.forEach(server => {
-                    const metrics = generateMetrics();
+                        const results = await Promise.all(
+            servers.map(async server => {
+                try {
+                    const response = await fetch(
+                        `/servers/${server.id}/health`
+                    );
+
+                    if (!response.ok) {
+                        throw new Error("Health request failed");
+                    }
+
+                    return {
+                        ...server,
+                        health: await response.json()
+                    };
+                } catch {
+                    return {
+                        ...server,
+                        health: { status: "offline" }
+                    };
+                }
+            })
+        );
+
+        results.forEach(server => {
+            const health = server.health;
+
+            const metrics = {
+                cpu: health.cpu_percent ?? 0,
+                ram: health.ram_percent ?? 0,
+                disk: health.disk_percent ?? 0
+            };
+
+            server.status = health.status;
                     const alerts = checkMetrics(metrics.cpu, metrics.ram, metrics.disk);
                     if (alerts.length > 0) allAlerts.push(...alerts);
 
@@ -373,7 +405,11 @@ HTML_TEMPLATE = """
             }
         });
 
-        document.addEventListener('DOMContentLoaded', loadDashboard);
+            document.addEventListener('DOMContentLoaded', () => {
+        loadDashboard();
+
+        setInterval(loadDashboard, 5000);
+    });
     </script>
 </body>
 </html>
@@ -467,6 +503,74 @@ class ServerCreate(BaseModel):
     hostname: str
     ssh_port: int = 22
 
+@app.get("/servers/{server_id}/health")
+def get_server_health(server_id: int, request: Request):
+    require_login(request)
+
+    connection = get_connection()
+    try:
+        cursor = connection.cursor(dictionary=True)
+        try:
+            cursor.execute(
+                "SELECT id, name, hostname, ssh_port "
+                "FROM servers WHERE id = %s",
+                (server_id,)
+            )
+            server = cursor.fetchone()
+        finally:
+            cursor.close()
+    finally:
+        connection.close()
+
+    if not server:
+        raise HTTPException(404, "Server not found")
+
+    # Windows host: collect local metrics
+    import socket
+
+    if server["hostname"].lower() == socket.gethostname().lower():
+        return {
+            "status": "online",
+            "cpu_percent": psutil.cpu_percent(interval=1),
+            "ram_percent": psutil.virtual_memory().percent,
+            "disk_percent": psutil.disk_usage(
+                os.path.abspath(os.sep)
+            ).percent
+        }
+
+    # Ubuntu VM: collect remote metrics through SSH
+    try:
+        # Select SSH username based on the remote server
+                # SSH usernames for each remote server
+        ssh_usernames = {
+            "192.168.56.101": "seed",
+            "192.168.56.10": "kali"
+        }
+
+        ssh_username = ssh_usernames.get(
+            server["hostname"]
+        )
+
+        if not ssh_username:
+            raise SSHMonitorError(
+                f"No SSH username configured for {server['hostname']}"
+            )
+
+        metrics = get_remote_health(
+            hostname=server["hostname"],
+            username=ssh_username,
+            port=server["ssh_port"]
+        )
+
+        return {"status": "online", **metrics}
+
+    except (SSHMonitorError, KeyError):
+        return {
+            "status": "offline",
+            "cpu_percent": None,
+            "ram_percent": None,
+            "disk_percent": None
+        }
 @app.post("/servers", status_code=201)
 def add_server(request: Request, server: ServerCreate):
     require_login(request)
