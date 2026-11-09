@@ -11,8 +11,6 @@ from auth import verify_password
 from database import *
 from ssh_monitor import get_remote_health, SSHMonitorError
 
-# IMPORTANT: replace this with your own random 64-char hex string.
-SECRET_KEY = "6a6e34449fec654e25d4e03954a4c542ff7cfe1bb592ca95a1f319de4863011b"
 
 # ---------- HTML Template: Login Page (Slide 5) ----------
 LOGIN_TEMPLATE = """
@@ -49,12 +47,9 @@ LOGIN_TEMPLATE = """
         .form-control {
             background: rgba(0,0,0,0.2);
             border: 1px solid rgba(255,255,255,0.1);
-            color: #ffffff !important; /* Forces typed text to be white */
+            color: #ffffff !important;
         }
-        .form-control::placeholder {
-            color: #a78bfa; /* Makes placeholder text visible */
-        }
-        /* Fixes Chrome's annoying autofill background color */
+        .form-control::placeholder { color: #a78bfa; }
         .form-control:-webkit-autofill {
             -webkit-text-fill-color: #fff !important;
             -webkit-box-shadow: 0 0 0px 1000px #2b1055 inset !important;
@@ -72,17 +67,9 @@ LOGIN_TEMPLATE = """
             font-weight: 600;
             padding: 0.6rem;
         }
-        .btn-primary:hover {
-            background: #c4b5fd;
-            color: #1a0b2e;
-        }
-        /* Forces the labels to be a visible light color */
-        .form-label {
-            color: #e2e8f0 !important;
-        }
-        .text-muted {
-            color: #cbd5e1 !important; /* Overrides the dark gray bootstrap text-muted */
-        }
+        .btn-primary:hover { background: #c4b5fd; color: #1a0b2e; }
+        .form-label { color: #e2e8f0 !important; }
+        .text-muted { color: #cbd5e1 !important; }
     </style>
 </head>
 <body>
@@ -138,14 +125,9 @@ HTML_TEMPLATE = """
 
         /* Sidebar Layout */
         .sidebar {
-            width: 250px;
-            height: 100vh;
-            position: fixed;
-            top: 0; left: 0;
+            width: 250px; height: 100vh; position: fixed; top: 0; left: 0;
             background: linear-gradient(180deg, var(--bg-sidebar) 0%, #0f172a 100%);
-            border-right: 1px solid rgba(255,255,255,0.05);
-            padding-top: 20px;
-            z-index: 1000;
+            border-right: 1px solid rgba(255,255,255,0.05); padding-top: 20px; z-index: 1000;
         }
         .sidebar-brand {
             font-size: 1.2rem; font-weight: 700; padding: 0 20px 20px 20px;
@@ -167,8 +149,7 @@ HTML_TEMPLATE = """
         .top-bar {
             background: var(--card-bg); border-radius: 12px; padding: 15px 25px;
             display: flex; justify-content: space-between; align-items: center;
-            margin-bottom: 30px; border: 1px solid rgba(255,255,255,0.05);
-            font-size: 0.9rem;
+            margin-bottom: 30px; border: 1px solid rgba(255,255,255,0.05); font-size: 0.9rem;
         }
         .status-dot { height: 10px; width: 10px; border-radius: 50%; display: inline-block; margin-right: 5px; }
         .status-online { background: var(--teal); box-shadow: 0 0 10px var(--teal); }
@@ -202,19 +183,16 @@ HTML_TEMPLATE = """
         .admin-tabs { display: flex; gap: 10px; margin-bottom: 20px; }
         .admin-tab { background: transparent; border: 1px solid rgba(255,255,255,0.1); color: var(--text-muted); border-radius: 20px; padding: 8px 20px; font-size: 0.9rem; cursor: pointer; }
         .admin-tab.active { border-color: var(--teal); color: var(--teal); }
-        
+
         /* Make form labels readable in dark mode */
         .modal .form-label {
-            color: #e2e8f0 !important; /* Light gray/white */
+            color: #e2e8f0 !important;
             font-weight: 500;
-            }
-            
-            /* Make the placeholder text inside the input boxes a bit brighter too */
-            .form-control::placeholder {
-                color: #94a3b8; 
-                opacity: 1:
-            }
-            
+        }
+        .form-control::placeholder {
+            color: #94a3b8; 
+            opacity: 1;
+        }
     </style>
 </head>
 <body>
@@ -245,8 +223,6 @@ HTML_TEMPLATE = """
                 </div>
                 <div class="text-muted small" id="stat-updated">Updated just now</div>
             </div>
-
-            <div id="global-alerts" class="mb-3"></div>
 
             <div class="row" id="server-grid">
                 <div class="col-12 text-center text-muted py-5">
@@ -416,10 +392,6 @@ HTML_TEMPLATE = """
         // Dashboard Logic
         const THRESHOLDS = { cpu_warning: 80, cpu_critical: 95, ram_warning: 85, ram_critical: 95, disk_warning: 80, disk_critical: 90 };
 
-        function generateMetrics() {
-            return { cpu: Math.round(Math.random() * 100), ram: Math.round(Math.random() * 100), disk: Math.round(Math.random() * 100) };
-        }
-
         function checkMetrics(cpu, ram, disk) {
             let alerts = [];
             if (cpu >= THRESHOLDS.cpu_critical) alerts.push(`CRITICAL: CPU ${cpu}%`);
@@ -444,18 +416,38 @@ HTML_TEMPLATE = """
                 }
 
                 let cardsHtml = '';
-                let allAlerts = [];
                 let onlineCount = 0;
                 let warningCount = 0;
 
-                servers.forEach(server => {
-                    const m = generateMetrics();
+                // Loop sequentially so we don't overwhelm the SSH connections
+                for (const server of servers) {
+                    let m = { cpu: 0, ram: 0, disk: 0 };
+                    let isOffline = false;
+
+                    // Fetch REAL metrics from the backend
+                    try {
+                        const metricRes = await fetch(`/servers/${server.id}/metrics`);
+                        if (metricRes.ok) {
+                            m = await metricRes.json();
+                        } else {
+                            isOffline = true;
+                        }
+                    } catch (e) {
+                        isOffline = true;
+                    }
+
                     const alerts = checkMetrics(m.cpu, m.ram, m.disk);
-                    if (alerts.length > 0) { allAlerts.push(...alerts); warningCount++; } else { onlineCount++; }
+                    if (isOffline) {
+                        warningCount++;
+                        alerts.push("CRITICAL: Server unreachable");
+                    } else if (alerts.length > 0) {
+                        warningCount++;
+                    } else {
+                        onlineCount++;
+                    }
 
-                    const statusClass = server.status && server.status.toLowerCase() === 'offline' ? 'opacity-50' : '';
+                    const statusClass = isOffline ? 'opacity-50' : '';
 
-                    // Determine colors based on thresholds
                     const cpuColor = m.cpu >= THRESHOLDS.cpu_critical ? 'bg-danger' : (m.cpu >= THRESHOLDS.cpu_warning ? 'bg-warning' : 'bg-info');
                     const ramColor = m.ram >= THRESHOLDS.ram_critical ? 'bg-danger' : (m.ram >= THRESHOLDS.ram_warning ? 'bg-warning' : 'bg-info');
                     const diskColor = m.disk >= THRESHOLDS.disk_critical ? 'bg-danger' : (m.disk >= THRESHOLDS.disk_warning ? 'bg-warning' : 'bg-info');
@@ -479,19 +471,19 @@ HTML_TEMPLATE = """
 
                                     <div class="row text-center mb-3">
                                         <div class="col-4">
-                                            <div class="metric-value">${m.cpu}%</div>
+                                            <div class="metric-value">${isOffline ? '--' : m.cpu + '%'}</div>
                                             <div class="text-muted small mb-2">CPU</div>
-                                            <div class="progress"><div class="progress-bar ${cpuColor}" style="width:${m.cpu}%"></div></div>
+                                            <div class="progress"><div class="progress-bar ${cpuColor}" style="width:${isOffline ? 0 : m.cpu}%"></div></div>
                                         </div>
                                         <div class="col-4">
-                                            <div class="metric-value">${m.ram}%</div>
+                                            <div class="metric-value">${isOffline ? '--' : m.ram + '%'}</div>
                                             <div class="text-muted small mb-2">RAM</div>
-                                            <div class="progress"><div class="progress-bar ${ramColor}" style="width:${m.ram}%"></div></div>
+                                            <div class="progress"><div class="progress-bar ${ramColor}" style="width:${isOffline ? 0 : m.ram}%"></div></div>
                                         </div>
                                         <div class="col-4">
-                                            <div class="metric-value">${m.disk}%</div>
+                                            <div class="metric-value">${isOffline ? '--' : m.disk + '%'}</div>
                                             <div class="text-muted small mb-2">Disk</div>
-                                            <div class="progress"><div class="progress-bar ${diskColor}" style="width:${m.disk}%"></div></div>
+                                            <div class="progress"><div class="progress-bar ${diskColor}" style="width:${isOffline ? 0 : m.disk}%"></div></div>
                                         </div>
                                     </div>
                                     <div class="mt-4 pt-3 border-top border-secondary border-opacity-25">
@@ -501,21 +493,21 @@ HTML_TEMPLATE = """
                             </div>
                         </div>
                     `;
-                });
+                }
 
                 grid.innerHTML = cardsHtml;
 
                 // Update Top Status Bar
                 document.getElementById('stat-online').textContent = `${onlineCount} online`;
                 document.getElementById('stat-warning').textContent = `${warningCount} need attention`;
-                document.getElementById('stat-updated').textContent = `Updated ${Math.floor(Math.random() * 5) + 1}s ago`;
+                document.getElementById('stat-updated').textContent = `Updated just now`;
 
             } catch (error) {
                 document.getElementById('server-grid').innerHTML = `<div class="col-12 text-center text-danger">Failed to load servers</div>`;
             }
         }
 
-        // Add/Delete/History logic remains the same...
+        // Add Server Form
         document.getElementById('addServerForm').addEventListener('submit', async function(e) {
             e.preventDefault();
             const name = document.getElementById('inputName').value.trim();
@@ -539,6 +531,7 @@ HTML_TEMPLATE = """
             } catch (err) { feedback.innerHTML = `<span class="text-danger">Network error</span>`; }
         });
 
+        // Delete Server
         document.addEventListener('click', async function(e) {
             const btn = e.target.closest('.delete-btn');
             if (!btn) return;
@@ -547,7 +540,7 @@ HTML_TEMPLATE = """
             loadDashboard();
         });
 
-        // History Graph Logic
+        // History Graph
         let currentChart = null;
         let historyRefreshTimer = null;
 
@@ -629,8 +622,8 @@ HTML_TEMPLATE = """
         });
 
         document.addEventListener('DOMContentLoaded', loadDashboard);
-        // Auto update stats every 15 seconds
-        setInterval(loadDashboard, 15000);
+        // Auto update stats every 30 seconds
+        setInterval(loadDashboard, 30000);
     </script>
 </body>
 </html>
@@ -638,7 +631,6 @@ HTML_TEMPLATE = """
 
 
 async def lifespan(app: FastAPI):
-    app = FastAPI(lifespan=lifespan)
     create_tables()
     server_id = get_or_create_main_server()
     health_task = asyncio.create_task(log_health(server_id))
@@ -646,8 +638,8 @@ async def lifespan(app: FastAPI):
     health_task.cancel()
 
 
+# noinspection PyTypeChecker
 app = FastAPI(lifespan=lifespan)
-# app.include_router(login_router) # Still commented out based on your last version
 
 app.add_middleware(SessionMiddleware, secret_key=SECRET_KEY)
 
@@ -780,6 +772,34 @@ def get_remote_system_health(request: Request):
         return get_remote_health(hostname=hostname, username=username, port=port)
     except SSHMonitorError as e:
         raise HTTPException(status_code=503, detail="Unable to collect remote server metrics")
+
+
+# NEW: Endpoint for the Dashboard cards to get real-time SSH data
+@app.get("/servers/{server_id}/metrics")
+def get_server_metrics(server_id: int, request: Request):
+    require_login(request)
+
+    connection = get_connection()
+    cursor = connection.cursor(dictionary=True)
+    try:
+        cursor.execute("SELECT hostname, ssh_port FROM servers WHERE id = %s", (server_id,))
+        server = cursor.fetchone()
+    finally:
+        cursor.close()
+        connection.close()
+
+    if not server:
+        raise HTTPException(status_code=404, detail="Server not found")
+
+    # Note: We are using the SSH_USER env variable for authentication here.
+    # In a real app, you would store usernames/keys in the database per-server.
+    username = os.environ.get("SSH_USER", "seed")
+    port = server["ssh_port"] or 22
+
+    try:
+        return get_remote_health(hostname=server["hostname"], username=username, port=port)
+    except SSHMonitorError as e:
+        raise HTTPException(status_code=503, detail="Failed to connect to server")
 
 
 @app.get("/health/history/{server_id}")
