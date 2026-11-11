@@ -1,30 +1,44 @@
 import asyncio
 import os
-
 import psutil
 from fastapi import FastAPI, HTTPException, Request, Form
 from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from starlette.middleware.sessions import SessionMiddleware
-
 from auth import verify_password
 from database import *
 from ssh_monitor import get_remote_health, SSHMonitorError
 
+# IMPORTANT: replace this with your own random 64-char hex string.
+# Generate one with: py -c "import secrets; print(secrets.token_hex(32))"
+SECRET_KEY = "6a6e34449fec654e25d4e03954a4c542ff7cfe1bb592ca95a1f319de4863011b"
 
-# ---------- HTML Template: Login Page (Slide 5) ----------
+
+
+# --- NOTIFICATION SETTINGS ---
+# In the future, these should be saved in your database so they persist on restart!
+# For now, we store them in memory.
+SETTINGS = {
+    "notification_email": "admin@example.com",
+    "smtp_user": "your_email@gmail.com",
+    "smtp_password": "your_app_password"  # Use a Gmail App Password, not your real password
+}
+
+# ---------- HTML Template: Login Page ----------
 LOGIN_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Login - Server Health Dashboard</title>
+    <title>Login - HiveMind Metrics</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    <link rel="icon" type="image/png" href="/static/egg_logo.png">
     <style>
         body {
-            background: linear-gradient(135deg, #2b1055 0%, #1a0b2e 100%);
+            background: linear-gradient(135deg, #1a0b2e 0%, #0f172a 100%);
             min-height: 100vh;
             display: flex;
             align-items: center;
@@ -33,29 +47,25 @@ LOGIN_TEMPLATE = """
             font-family: 'Inter', sans-serif;
         }
         .login-card {
-            max-width: 400px;
+            max-width: 450px;
             width: 100%;
             border-radius: 16px;
-            background: rgba(255, 255, 255, 0.05);
+            background: rgba(255, 255, 255, 0.03);
             backdrop-filter: blur(10px);
             border: 1px solid rgba(255, 255, 255, 0.1);
-            box-shadow: 0 8px 32px rgba(0,0,0,0.4);
-            padding: 2.5rem;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.6);
+            padding: 3rem 2.5rem;
         }
-        .brand-title { font-weight: 700; letter-spacing: -0.5px; }
-        .tagline { color: #a78bfa; font-size: 0.9rem; margin-bottom: 2rem; }
+        .brand-title { font-family: serif; font-weight: 700; letter-spacing: 2px; }
+        .tagline { color: #a78bfa; letter-spacing: 5px; font-size: 0.7rem; text-transform: uppercase; margin-bottom: 2rem; }
         .form-control {
-            background: rgba(0,0,0,0.2);
+            background: rgba(0,0,0,0.3);
             border: 1px solid rgba(255,255,255,0.1);
             color: #ffffff !important;
         }
-        .form-control::placeholder { color: #a78bfa; }
-        .form-control:-webkit-autofill {
-            -webkit-text-fill-color: #fff !important;
-            -webkit-box-shadow: 0 0 0px 1000px #2b1055 inset !important;
-        }
+        .form-control::placeholder { color: #64748b; }
         .form-control:focus {
-            background: rgba(0,0,0,0.3);
+            background: rgba(0,0,0,0.5);
             color: #fff;
             border-color: #a78bfa;
             box-shadow: 0 0 0 0.25rem rgba(167, 139, 250, 0.25);
@@ -75,11 +85,12 @@ LOGIN_TEMPLATE = """
 <body>
     <div class="login-card">
         <div class="text-center mb-4">
-            <h2 class="brand-title">Server Health Dashboard</h2>
-            <p class="tagline">A+ service for your servers.</p>
+            <img src="/static/egg_logo.png" alt="HiveMind Logo" style="width: 140px; height: 140px; border-radius: 50%; object-fit: cover; border: 2px solid #a78bfa; box-shadow: 0 0 20px rgba(167, 139, 250, 0.5); margin-bottom: 15px;">
+            <h2 class="brand-title">HIVE MIND</h2>
+            <p class="tagline">Metrics</p>
         </div>
 
-        <p class="text-center text-muted small mb-3">CPU, memory and disk for every machine in your lab, in one place.</p>
+        <p class="text-center text-muted small mb-4">Helping all of your servers think alike.</p>
 
         %%ERROR%%
 
@@ -99,16 +110,17 @@ LOGIN_TEMPLATE = """
 </html>
 """
 
-# ---------- HTML Template: Dashboard (Slides 6-8) ----------
+# ---------- HTML Template: Dashboard ----------
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Dashboard - Server Health</title>
+    <title>Dashboard - HiveMind Metrics</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    <link rel="icon" type="image/png" href="/static/egg_logo.png">
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
     <style>
         :root {
@@ -123,46 +135,58 @@ HTML_TEMPLATE = """
         }
         body { background: var(--bg-main); color: var(--text-main); font-family: 'Inter', sans-serif; overflow-x: hidden; }
 
-        /* Sidebar Layout */
+        /* Sidebar Layout with Background Image */
         .sidebar {
-            width: 250px; height: 100vh; position: fixed; top: 0; left: 0;
-            background: linear-gradient(180deg, var(--bg-sidebar) 0%, #0f172a 100%);
-            border-right: 1px solid rgba(255,255,255,0.05); padding-top: 20px; z-index: 1000;
+            width: 260px;
+            height: 100vh;
+            position: fixed;
+            top: 0; left: 0;
+            background: linear-gradient(180deg, rgba(26, 11, 46, 0.85) 0%, rgba(15, 23, 42, 0.95) 100%), url('/static/egg_logo.png') center top / cover no-repeat;
+            border-right: 1px solid rgba(255,255,255,0.05);
+            padding-top: 30px;
+            z-index: 1000;
         }
         .sidebar-brand {
-            font-size: 1.2rem; font-weight: 700; padding: 0 20px 20px 20px;
-            border-bottom: 1px solid rgba(255,255,255,0.05); margin-bottom: 20px;
-            color: #fff; display: flex; align-items: center; gap: 10px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 0 20px 20px 20px;
+            border-bottom: 1px solid rgba(255,255,255,0.05); 
+            margin-bottom: 20px;
+            color: #fff; 
         }
-        .sidebar-brand i { color: var(--accent); }
         .nav-link {
             color: var(--text-muted); padding: 12px 20px; font-weight: 500;
-            transition: all 0.2s; margin: 4px 10px; border-radius: 8px;
+            transition: all 0.2s; margin: 4px 15px; border-radius: 8px;
         }
         .nav-link:hover { color: #fff; background: rgba(255,255,255,0.05); }
         .nav-link.active { color: #fff; background: var(--accent); box-shadow: 0 4px 15px rgba(168, 85, 247, 0.4); }
 
         /* Main Content */
-        .main-content { margin-left: 250px; padding: 30px; transition: 0.3s; }
+        .main-content { margin-left: 260px; padding: 30px; transition: 0.3s; }
 
-        /* Top Bar (Slide 6) */
-        .top-bar {
-            background: var(--card-bg); border-radius: 12px; padding: 15px 25px;
-            display: flex; justify-content: space-between; align-items: center;
-            margin-bottom: 30px; border: 1px solid rgba(255,255,255,0.05); font-size: 0.9rem;
+        /* Top Status Bar Pills */
+        .status-pill {
+            background: transparent; border-radius: 50px; padding: 8px 20px;
+            font-size: 0.85rem; font-weight: 600; border: 1px solid;
         }
-        .status-dot { height: 10px; width: 10px; border-radius: 50%; display: inline-block; margin-right: 5px; }
-        .status-online { background: var(--teal); box-shadow: 0 0 10px var(--teal); }
-        .status-warning { background: #f59e0b; box-shadow: 0 0 10px #f59e0b; }
+        .pill-online { border-color: var(--teal); color: var(--teal); }
+        .pill-warning { border-color: #f59e0b; color: #f59e0b; }
+        .pill-updated { border-color: rgba(255,255,255,0.1); color: var(--text-muted); }
 
         /* Cards */
         .card {
             background: var(--card-bg); border: 1px solid rgba(255,255,255,0.05);
             border-radius: 12px; color: var(--text-main); margin-bottom: 20px;
         }
+        .server-card-critical { border-left: 4px solid #ef4444; }
+        .server-card-warning { border-left: 4px solid #f59e0b; }
+        .server-card-healthy { border-left: 4px solid var(--teal); }
+
         .card-header { border-bottom: 1px solid rgba(255,255,255,0.05); background: transparent; }
-        .metric-value { font-size: 1.5rem; font-weight: 700; color: #fff; }
-        .progress { height: 8px; background: rgba(255,255,255,0.1); border-radius: 4px; }
+        .metric-value { font-size: 1.8rem; font-weight: 700; color: #fff; }
+        .metric-label { font-size: 0.75rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 1px; }
+        .progress { height: 6px; background: rgba(255,255,255,0.1); border-radius: 4px; margin-top: 8px; }
         .progress-bar { border-radius: 4px; }
 
         /* Buttons */
@@ -172,27 +196,19 @@ HTML_TEMPLATE = """
         .btn-teal:hover { background: #5eead4; }
         .add-btn { position: fixed; bottom: 30px; right: 30px; z-index: 1000; box-shadow: 0 4px 15px rgba(168, 85, 247, 0.4); }
 
-        /* Modals */
+        /* Modals & Forms */
         .modal-content { background: var(--card-bg); color: #fff; border: 1px solid rgba(255,255,255,0.1); }
         .modal-header { border-bottom: 1px solid rgba(255,255,255,0.05); }
         .modal-footer { border-top: 1px solid rgba(255,255,255,0.05); }
         .form-control, .form-select { background: rgba(0,0,0,0.2); border: 1px solid rgba(255,255,255,0.1); color: #fff; }
         .form-control:focus { background: rgba(0,0,0,0.3); color: #fff; border-color: var(--accent); box-shadow: none; }
+        .modal .form-label { color: #e2e8f0 !important; font-weight: 500; }
+        .form-control::placeholder { color: #94a3b8; opacity: 1; }
 
         /* Admin Tabs */
         .admin-tabs { display: flex; gap: 10px; margin-bottom: 20px; }
         .admin-tab { background: transparent; border: 1px solid rgba(255,255,255,0.1); color: var(--text-muted); border-radius: 20px; padding: 8px 20px; font-size: 0.9rem; cursor: pointer; }
         .admin-tab.active { border-color: var(--teal); color: var(--teal); }
-
-        /* Make form labels readable in dark mode */
-        .modal .form-label {
-            color: #e2e8f0 !important;
-            font-weight: 500;
-        }
-        .form-control::placeholder {
-            color: #94a3b8; 
-            opacity: 1;
-        }
     </style>
 </head>
 <body>
@@ -200,11 +216,13 @@ HTML_TEMPLATE = """
     <!-- Sidebar -->
     <div class="sidebar">
         <div class="sidebar-brand">
-            <i class="fas fa-server"></i> Server Health
+            <img src="/static/egg_logo.png" alt="HiveMind Logo" style="width: 110px; height: 110px; border-radius: 50%; object-fit: cover; border: 2px solid var(--accent); box-shadow: 0 0 20px rgba(168, 85, 247, 0.5); margin-bottom: 15px;">
+            <h3 style="font-family: serif; font-size: 1.3rem; letter-spacing: 1px; margin-bottom: 0;">HIVE MIND</h3>
+            <p style="font-size: 0.6rem; letter-spacing: 4px; color: var(--text-muted); text-transform: uppercase;">Metrics</p>
         </div>
         <nav class="nav flex-column">
-            <a class="nav-link active" href="#" id="nav-dashboard" onclick="showView('dashboard')"><i class="fas fa-tachometer-alt me-2"></i> Dashboard</a>
-            <a class="nav-link" href="#" id="nav-admin" onclick="showView('admin')"><i class="fas fa-shield-alt me-2"></i> Admin</a>
+            <a class="nav-link active" href="#" id="nav-dashboard" onclick="showView('dashboard')"><i class="fas fa-th-large me-2"></i> Dashboard</a>
+            <a class="nav-link" href="#" id="nav-admin" onclick="showView('admin')"><i class="fas fa-user-cog me-2"></i> Admin</a>
             <a class="nav-link mt-4 text-danger" href="#" onclick="document.getElementById('logoutForm').submit()"><i class="fas fa-sign-out-alt me-2"></i> Log out</a>
         </nav>
         <form id="logoutForm" method="POST" action="/logout" class="d-none"></form>
@@ -215,30 +233,40 @@ HTML_TEMPLATE = """
 
         <!-- DASHBOARD VIEW -->
         <div id="view-dashboard">
-            <!-- Top Status Bar -->
-            <div class="top-bar">
-                <div>
-                    <span class="status-dot status-online"></span> <span id="stat-online" class="me-3">Loading...</span>
-                    <span class="status-dot status-warning"></span> <span id="stat-warning" class="text-muted">Loading...</span>
+            <h3 class="mb-4 fw-bold">Overview</h3>
+
+            <!-- Top Status Pills -->
+            <div class="d-flex gap-3 mb-4">
+                <div class="status-pill pill-online">
+                    <span id="stat-online">Loading...</span>
                 </div>
-                <div class="text-muted small" id="stat-updated">Updated just now</div>
+                <div class="status-pill pill-warning">
+                    <span id="stat-warning">Loading...</span>
+                </div>
+                <div class="status-pill pill-updated">
+                    <span id="stat-updated">Updated just now <i class="fas fa-sync-alt ms-1"></i></span>
+                </div>
             </div>
 
-            <div class="row" id="server-grid">
-                <div class="col-12 text-center text-muted py-5">
-                    <i class="fas fa-spinner fa-spin fa-2x mb-3 text-accent"></i><br>Loading servers...
+            <div class="row">
+                <div class="col-lg-12">
+                    <div class="row" id="server-grid">
+                        <div class="col-12 text-center text-muted py-5">
+                            <i class="fas fa-spinner fa-spin fa-2x mb-3 text-accent"></i><br>Loading servers...
+                        </div>
+                    </div>
                 </div>
             </div>
         </div>
 
-        <!-- ADMIN VIEW (Slide 8) -->
+        <!-- ADMIN VIEW -->
         <div id="view-admin" style="display: none;">
-            <h3 class="mb-4">Admin Settings</h3>
+            <h3 class="mb-4 fw-bold">Admin Settings</h3>
 
             <div class="admin-tabs">
-                <div class="admin-tab active" onclick="switchAdminTab('thresholds', this)">Alert thresholds</div>
+                <div class="admin-tab active" onclick="switchAdminTab('thresholds', this)">Alert Thresholds</div>
+                <div class="admin-tab" onclick="switchAdminTab('notifications', this)">Notifications</div>
                 <div class="admin-tab" onclick="switchAdminTab('users', this)">Users</div>
-                <div class="admin-tab" onclick="switchAdminTab('servers', this)">Servers</div>
             </div>
 
             <!-- Alert Thresholds -->
@@ -285,7 +313,21 @@ HTML_TEMPLATE = """
                 <button class="btn btn-teal px-4 py-2 rounded-3" style="width: fit-content;">Save thresholds</button>
             </div>
 
-            <!-- Users Tab (Skeleton) -->
+            <!-- Notifications Tab -->
+            <div id="tab-notifications" class="card p-4" style="display: none;">
+                <h5 class="mb-4">External Notifications</h5>
+                <p class="text-muted small mb-4">Configure where to send alerts when a server hits a critical threshold.</p>
+
+                <div class="mb-4" style="max-width: 400px;">
+                    <label class="form-label small">Notification Email Address</label>
+                    <input type="email" class="form-control" id="inputNotifyEmail" placeholder="admin@example.com" value="admin@example.com">
+                </div>
+
+                <button class="btn btn-teal px-4 py-2 rounded-3" onclick="saveNotificationSettings()">Save Settings</button>
+                <div id="notifyFeedback" class="mt-3 small text-success"></div>
+            </div>
+
+            <!-- Users Tab -->
             <div id="tab-users" class="card p-4" style="display: none;">
                 <div class="d-flex justify-content-between align-items-center mb-3">
                     <h5>Users</h5>
@@ -299,11 +341,6 @@ HTML_TEMPLATE = """
                 </table>
             </div>
 
-            <!-- Servers Tab (Skeleton) -->
-            <div id="tab-servers" class="card p-4" style="display: none;">
-                <h5>Servers Management</h5>
-                <p class="text-muted mt-2">Edit and delete servers here in a future update.</p>
-            </div>
         </div>
 
     </div>
@@ -324,15 +361,15 @@ HTML_TEMPLATE = """
                 <div class="modal-body">
                     <form id="addServerForm">
                         <div class="mb-3">
-                            <label class="form-label text-muted small">Name</label>
+                            <label class="form-label small">Name</label>
                             <input type="text" class="form-control" id="inputName" placeholder="Pi-345" required minlength="3">
                         </div>
                         <div class="mb-3">
-                            <label class="form-label text-muted small">Hostname or IP</label>
+                            <label class="form-label small">Hostname or IP</label>
                             <input type="text" class="form-control" id="inputHostname" placeholder="192.168.1.30" required>
                         </div>
                         <div class="mb-3">
-                            <label class="form-label text-muted small">SSH port</label>
+                            <label class="form-label small">SSH port</label>
                             <input type="number" class="form-control" id="inputPort" value="22" min="1" max="65535">
                         </div>
                         <div class="d-flex justify-content-between align-items-center mt-4">
@@ -385,23 +422,27 @@ HTML_TEMPLATE = """
             document.querySelectorAll('.admin-tab').forEach(t => t.classList.remove('active'));
             el.classList.add('active');
             document.getElementById('tab-thresholds').style.display = tab === 'thresholds' ? 'block' : 'none';
+            document.getElementById('tab-notifications').style.display = tab === 'notifications' ? 'block' : 'none';
             document.getElementById('tab-users').style.display = tab === 'users' ? 'block' : 'none';
-            document.getElementById('tab-servers').style.display = tab === 'servers' ? 'block' : 'none';
+        }
+
+        async function saveNotificationSettings() {
+            const email = document.getElementById('inputNotifyEmail').value;
+            try {
+                await fetch('/admin/settings/email', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ email: email })
+                });
+                document.getElementById('notifyFeedback').textContent = 'Settings saved successfully!';
+                setTimeout(() => document.getElementById('notifyFeedback').textContent = '', 3000);
+            } catch(e) {
+                alert("Error saving settings");
+            }
         }
 
         // Dashboard Logic
         const THRESHOLDS = { cpu_warning: 80, cpu_critical: 95, ram_warning: 85, ram_critical: 95, disk_warning: 80, disk_critical: 90 };
-
-        function checkMetrics(cpu, ram, disk) {
-            let alerts = [];
-            if (cpu >= THRESHOLDS.cpu_critical) alerts.push(`CRITICAL: CPU ${cpu}%`);
-            else if (cpu >= THRESHOLDS.cpu_warning) alerts.push(`WARNING: CPU ${cpu}%`);
-            if (ram >= THRESHOLDS.ram_critical) alerts.push(`CRITICAL: RAM ${ram}%`);
-            else if (ram >= THRESHOLDS.ram_warning) alerts.push(`WARNING: RAM ${ram}%`);
-            if (disk >= THRESHOLDS.disk_critical) alerts.push(`CRITICAL: Disk ${disk}%`);
-            else if (disk >= THRESHOLDS.disk_warning) alerts.push(`WARNING: Disk ${disk}%`);
-            return alerts;
-        }
 
         async function loadDashboard() {
             try {
@@ -419,16 +460,19 @@ HTML_TEMPLATE = """
                 let onlineCount = 0;
                 let warningCount = 0;
 
-                // Loop sequentially so we don't overwhelm the SSH connections
                 for (const server of servers) {
-                    let m = { cpu: 0, ram: 0, disk: 0 };
+                    let m = { cpu: 0, ram: 0, disks: [], alerts: [] };
                     let isOffline = false;
 
-                    // Fetch REAL metrics from the backend
                     try {
                         const metricRes = await fetch(`/servers/${server.id}/metrics`);
                         if (metricRes.ok) {
                             m = await metricRes.json();
+
+                            // Fallback: If teammate hasn't updated ssh_monitor.py yet, handle old single disk format
+                            if (!m.disks && m.disk_percent !== undefined) {
+                                m.disks = [{ mount: "/", percent: m.disk_percent }];
+                            }
                         } else {
                             isOffline = true;
                         }
@@ -436,28 +480,51 @@ HTML_TEMPLATE = """
                         isOffline = true;
                     }
 
-                    const alerts = checkMetrics(m.cpu, m.ram, m.disk);
+                    // Use alerts returned by the backend!
+                    const alerts = m.alerts || [];
+                    let cardStatusClass = 'server-card-healthy';
+
                     if (isOffline) {
                         warningCount++;
-                        alerts.push("CRITICAL: Server unreachable");
+                        cardStatusClass = 'server-card-critical';
                     } else if (alerts.length > 0) {
                         warningCount++;
+                        cardStatusClass = alerts[0].includes('CRITICAL') ? 'server-card-critical' : 'server-card-warning';
                     } else {
                         onlineCount++;
                     }
 
-                    const statusClass = isOffline ? 'opacity-50' : '';
+                    // Build the Disk HTML dynamically
+                    let diskHtml = '';
+                    if (m.disks && m.disks.length > 0) {
+                        m.disks.forEach(d => {
+                            const color = d.percent >= THRESHOLDS.disk_critical ? 'bg-danger' : (d.percent >= THRESHOLDS.disk_warning ? 'bg-warning' : 'bg-info');
+                            diskHtml += `
+                                <div class="col-4 mt-2">
+                                    <div class="metric-value">${isOffline ? '--' : d.percent + '%'}</div>
+                                    <div class="metric-label">${d.mount}</div>
+                                    <div class="progress"><div class="progress-bar ${color}" style="width:${isOffline ? 0 : d.percent}%"></div></div>
+                                </div>
+                            `;
+                        });
+                    }
 
                     const cpuColor = m.cpu >= THRESHOLDS.cpu_critical ? 'bg-danger' : (m.cpu >= THRESHOLDS.cpu_warning ? 'bg-warning' : 'bg-info');
                     const ramColor = m.ram >= THRESHOLDS.ram_critical ? 'bg-danger' : (m.ram >= THRESHOLDS.ram_warning ? 'bg-warning' : 'bg-info');
-                    const diskColor = m.disk >= THRESHOLDS.disk_critical ? 'bg-danger' : (m.disk >= THRESHOLDS.disk_warning ? 'bg-warning' : 'bg-info');
 
                     cardsHtml += `
-                        <div class="col-md-4 mb-4">
-                            <div class="card h-100 ${statusClass}">
-                                <div class="card-header d-flex justify-content-between align-items-center py-3">
-                                    <span class="fw-bold"><i class="fas fa-server me-2 text-muted"></i>${server.name}</span>
-                                    <div class="d-flex gap-2">
+                        <div class="col-md-12 mb-3">
+                            <div class="card p-3 ${cardStatusClass}">
+                                <div class="d-flex justify-content-between align-items-center mb-3">
+                                    <div>
+                                        <h5 class="mb-0 fw-bold">${server.name}</h5>
+                                        <span class="text-muted small">${server.hostname} : ${server.ssh_port}</span>
+                                    </div>
+                                    <div class="d-flex align-items-center gap-3">
+                                        <span class="small ${isOffline ? 'text-danger' : (alerts.length ? 'text-warning' : 'text-success')}">
+                                            <i class="fas fa-circle me-1" style="font-size: 0.6rem;"></i> 
+                                            ${isOffline ? 'offline' : (alerts.length ? (alerts[0].includes('CRITICAL') ? 'critical' : 'warning') : 'healthy')}
+                                        </span>
                                         <button class="btn btn-outline-info btn-sm history-btn" data-id="${server.id}" data-name="${server.name}" title="History">
                                             <i class="fas fa-chart-line"></i>
                                         </button>
@@ -466,29 +533,22 @@ HTML_TEMPLATE = """
                                         </button>
                                     </div>
                                 </div>
-                                <div class="card-body">
-                                    <p class="text-muted small mb-4">${server.hostname} : ${server.ssh_port}</p>
 
-                                    <div class="row text-center mb-3">
-                                        <div class="col-4">
-                                            <div class="metric-value">${isOffline ? '--' : m.cpu + '%'}</div>
-                                            <div class="text-muted small mb-2">CPU</div>
-                                            <div class="progress"><div class="progress-bar ${cpuColor}" style="width:${isOffline ? 0 : m.cpu}%"></div></div>
-                                        </div>
-                                        <div class="col-4">
-                                            <div class="metric-value">${isOffline ? '--' : m.ram + '%'}</div>
-                                            <div class="text-muted small mb-2">RAM</div>
-                                            <div class="progress"><div class="progress-bar ${ramColor}" style="width:${isOffline ? 0 : m.ram}%"></div></div>
-                                        </div>
-                                        <div class="col-4">
-                                            <div class="metric-value">${isOffline ? '--' : m.disk + '%'}</div>
-                                            <div class="text-muted small mb-2">Disk</div>
-                                            <div class="progress"><div class="progress-bar ${diskColor}" style="width:${isOffline ? 0 : m.disk}%"></div></div>
-                                        </div>
+                                <div class="row text-center mt-2">
+                                    <!-- CPU & RAM -->
+                                    <div class="col-4">
+                                        <div class="metric-value">${isOffline ? '--' : m.cpu + '%'}</div>
+                                        <div class="metric-label">CPU</div>
+                                        <div class="progress"><div class="progress-bar ${cpuColor}" style="width:${isOffline ? 0 : m.cpu}%"></div></div>
                                     </div>
-                                    <div class="mt-4 pt-3 border-top border-secondary border-opacity-25">
-                                        ${alerts.length ? `<span class="text-danger small"><i class="fas fa-exclamation-triangle me-1"></i>${alerts[0]}</span>` : `<span class="text-success small"><i class="fas fa-check-circle me-1"></i> No alerts</span>`}
+                                    <div class="col-4">
+                                        <div class="metric-value">${isOffline ? '--' : m.ram + '%'}</div>
+                                        <div class="metric-label">RAM</div>
+                                        <div class="progress"><div class="progress-bar ${ramColor}" style="width:${isOffline ? 0 : m.ram}%"></div></div>
                                     </div>
+
+                                    <!-- Dynamically Generated Disks -->
+                                    ${diskHtml}
                                 </div>
                             </div>
                         </div>
@@ -497,10 +557,9 @@ HTML_TEMPLATE = """
 
                 grid.innerHTML = cardsHtml;
 
-                // Update Top Status Bar
                 document.getElementById('stat-online').textContent = `${onlineCount} online`;
                 document.getElementById('stat-warning').textContent = `${warningCount} need attention`;
-                document.getElementById('stat-updated').textContent = `Updated just now`;
+                document.getElementById('stat-updated').innerHTML = `Updated just now <i class="fas fa-sync-alt ms-1"></i>`;
 
             } catch (error) {
                 document.getElementById('server-grid').innerHTML = `<div class="col-12 text-center text-danger">Failed to load servers</div>`;
@@ -577,7 +636,7 @@ HTML_TEMPLATE = """
                     const labels = rows.map(r => new Date(r.logged_at).toLocaleTimeString());
                     const cpuData = rows.map(r => r.cpu_percent);
                     const ramData = rows.map(r => r.ram_percent);
-                    const diskData = rows.map(r => r.disk_percent);
+                    const diskData = rows.map(r => r.disk_percent); // Note: this only graphs root disk for now
 
                     if (currentChart) {
                         currentChart.data.labels = labels;
@@ -622,12 +681,71 @@ HTML_TEMPLATE = """
         });
 
         document.addEventListener('DOMContentLoaded', loadDashboard);
-        // Auto update stats every 30 seconds
         setInterval(loadDashboard, 30000);
     </script>
 </body>
 </html>
 """
+
+
+# ---------- Backend Logic ----------
+
+async def send_alert_email(server_name, alert_message):
+    """
+    Stub function to send an email.
+    To make this work for real, set smtp_user and smtp_password in SETTINGS.
+    (Google requires you to generate an "App Password" for this to work).
+    """
+    recipient = SETTINGS.get("notification_email")
+    if not recipient:
+        return
+
+    subject = f"🚨 HiveMind Alert: {server_name}"
+    body = f"Critical threshold reached on {server_name}:\n\n{alert_message}"
+
+    print(f"\n--- 📧 EMAIL PREPARED ---")
+    print(f"To: {recipient}")
+    print(f"Subject: {subject}")
+    print(f"Body: {body}")
+    print(f"-------------------------\n")
+
+    # Uncomment below to actually send the email (requires valid SMTP credentials)
+    """
+    try:
+        msg = EmailMessage()
+        msg.set_content(body)
+        msg['Subject'] = subject
+        msg['From'] = SETTINGS["smtp_user"]
+        msg['To'] = recipient
+
+        with smtplib.SMTP_SSL('smtp.gmail.com', 465) as smtp:
+            smtp.login(SETTINGS["smtp_user"], SETTINGS["smtp_password"])
+            smtp.send_message(msg)
+    except Exception as e:
+        print(f"Failed to send email: {e}")
+    """
+
+
+def check_backend_thresholds(cpu, ram, disks):
+    """Evaluates metrics on the server so it can trigger emails."""
+    alerts = []
+    if cpu >= 95:
+        alerts.append(f"CRITICAL: CPU {cpu}%")
+    elif cpu >= 80:
+        alerts.append(f"WARNING: CPU {cpu}%")
+
+    if ram >= 95:
+        alerts.append(f"CRITICAL: RAM {ram}%")
+    elif ram >= 85:
+        alerts.append(f"WARNING: RAM {ram}%")
+
+    for d in disks:
+        if d["percent"] >= 90:
+            alerts.append(f"CRITICAL: Disk {d['mount']} {d['percent']}%")
+        elif d["percent"] >= 80:
+            alerts.append(f"WARNING: Disk {d['mount']} {d['percent']}%")
+
+    return alerts
 
 
 async def lifespan(app: FastAPI):
@@ -637,9 +755,9 @@ async def lifespan(app: FastAPI):
     yield
     health_task.cancel()
 
-
 # noinspection PyTypeChecker
 app = FastAPI(lifespan=lifespan)
+app.mount("/static", StaticFiles(directory="static"), name="static")
 
 app.add_middleware(SessionMiddleware, secret_key=SECRET_KEY)
 
@@ -656,6 +774,19 @@ def require_login(request: Request):
     return user
 
 
+# ---------- Admin Settings Routes ----------
+class EmailSettings(BaseModel):
+    email: str
+
+
+@app.post("/admin/settings/email")
+def update_email_settings(settings: EmailSettings, request: Request):
+    require_login(request)
+    SETTINGS["notification_email"] = settings.email
+    return {"message": "Settings updated"}
+
+
+# ---------- Auth Routes ----------
 @app.get("/login", response_class=HTMLResponse)
 def login_page(request: Request):
     if request.session.get("user"):
@@ -691,6 +822,7 @@ def logout(request: Request):
     return RedirectResponse(url="/login", status_code=302)
 
 
+# ---------- Server Routes ----------
 class ServerCreate(BaseModel):
     name: str
     hostname: str
@@ -745,38 +877,9 @@ def delete_server(server_id: int, request: Request):
         connection.close()
 
 
-@app.get("/health")
-def get_system_health():
-    disk_path = os.path.abspath(os.sep)
-    user = psutil.users()
-    return {
-        "user": user[0].name if user else "System",
-        "net_if_stats": psutil.net_if_addrs(),
-        "cpu_percent": psutil.cpu_percent(interval=1),
-        "ram_percent": psutil.virtual_memory().percent,
-        "disk_percent": psutil.disk_usage(disk_path).percent
-    }
-
-
-@app.get("/remote-health")
-def get_remote_system_health(request: Request):
-    require_login(request)
-    hostname = os.environ.get("SSH_HOST")
-    username = os.environ.get("SSH_USER")
-    port = int(os.environ.get("SSH_PORT", "22"))
-
-    if not hostname or not username:
-        raise HTTPException(status_code=500, detail="SSH_HOST and SSH_USER are not configured")
-
-    try:
-        return get_remote_health(hostname=hostname, username=username, port=port)
-    except SSHMonitorError as e:
-        raise HTTPException(status_code=503, detail="Unable to collect remote server metrics")
-
-
-# NEW: Endpoint for the Dashboard cards to get real-time SSH data
+# ---------- Metric Routes ----------
 @app.get("/servers/{server_id}/metrics")
-def get_server_metrics(server_id: int, request: Request):
+async def get_server_metrics(server_id: int, request: Request):
     require_login(request)
 
     connection = get_connection()
@@ -791,14 +894,31 @@ def get_server_metrics(server_id: int, request: Request):
     if not server:
         raise HTTPException(status_code=404, detail="Server not found")
 
-    # Note: We are using the SSH_USER env variable for authentication here.
-    # In a real app, you would store usernames/keys in the database per-server.
     username = os.environ.get("SSH_USER", "seed")
     port = server["ssh_port"] or 22
 
     try:
-        return get_remote_health(hostname=server["hostname"], username=username, port=port)
+        # Fetch from teammate's ssh_monitor.py
+        metrics = get_remote_health(hostname=server["hostname"], username=username, port=port)
+
+        # --- MODULAR DISK FALLBACK ---
+        # If teammate hasn't updated ssh_monitor.py yet, convert single disk to list
+        if "disks" not in metrics and "disk_percent" in metrics:
+            metrics["disks"] = [{"mount": "/", "percent": metrics["disk_percent"]}]
+
+        # Evaluate alerts on the backend so we can email them!
+        backend_alerts = check_backend_thresholds(metrics.get("cpu_percent", 0), metrics.get("ram_percent", 0),
+                                                  metrics.get("disks", []))
+        metrics["alerts"] = backend_alerts
+
+        # If there are alerts, trigger the email stub
+        if backend_alerts:
+            await send_alert_email(server["name"], backend_alerts[0])
+
+        return metrics
+
     except SSHMonitorError as e:
+        print(f"🚨 SSH ERROR FOR {server['hostname']}: {e}")
         raise HTTPException(status_code=503, detail="Failed to connect to server")
 
 
@@ -823,6 +943,7 @@ def get_health_history(server_id: int, request: Request, limit: int = 120):
         connection.close()
 
 
+# ---------- Background Logging ----------
 async def log_health(server_id: int):
     while True:
         try:
