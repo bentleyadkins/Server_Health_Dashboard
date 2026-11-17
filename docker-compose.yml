@@ -1,19 +1,40 @@
-version: '3.8' # Supported version
-
 services:
   db:
-    image: mysql:8.0 # Docker mySQL 8.0 downloaded from dockerhub
+    image: mysql:8.0
     container_name: mysql_health_dashboard
-    restart: always # Always 
+    restart: unless-stopped
     environment:
-      MYSQL_ROOT_PASSWORD: root # mysql.connector user
+      MYSQL_ROOT_PASSWORD: root
       MYSQL_DATABASE: health_dashboard
       MYSQL_USER: user
-      MYSQL_PASSWORD: root # mysql.connector password
+      MYSQL_PASSWORD: root
     ports:
       - "3306:3306"
     volumes:
       - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p\"$${MYSQL_ROOT_PASSWORD}\" --silent"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+  app:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+    environment:
+      SSH_USER: bentley
+      SSH_KEY_FILE: /root/.ssh/id_ed25519
+    volumes:
+      - type: bind
+        source: ${USERPROFILE}/.ssh/health-dashboard
+        target: /root/.ssh
+        read_only: true
 
 volumes:
   mysql_data:

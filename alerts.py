@@ -1,11 +1,12 @@
 import os
 import time
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 import psutil
 
 
 WARNING_THRESHOLD = 80
 CRITICAL_THRESHOLD = 90
+EASTERN_STANDARD_TIME = timezone(timedelta(hours=-5), "EST")
 
 
 def get_status(percent):
@@ -58,7 +59,7 @@ def get_system_health():
     uptime_hours = uptime_seconds / 3600
 
     # Current timestamp
-    timestamp = datetime.now().isoformat()
+    timestamp = datetime.now(EASTERN_STANDARD_TIME).isoformat()
 
     # Current user
     users = psutil.users()
