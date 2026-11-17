@@ -632,12 +632,40 @@ HTML_TEMPLATE = """
                 let warningCount = 0;
                 const cards = [];
 
-                servers.forEach(server => {
-                    const metrics = {
-                        cpu: server.cpu_percent,
-                        ram: server.ram_percent,
-                        disk: server.disk_percent
+                        const results = await Promise.all(
+            servers.map(async server => {
+                try {
+                    const response = await fetch(
+                        `/servers/${server.id}/health`
+                    );
+
+                    if (!response.ok) {
+                        throw new Error("Health request failed");
+                    }
+
+                    return {
+                        ...server,
+                        health: await response.json()
                     };
+                } catch {
+                    return {
+                        ...server,
+                        health: { status: "offline" }
+                    };
+                }
+            })
+        );
+
+        results.forEach(server => {
+            const health = server.health;
+
+            const metrics = {
+                cpu: health.cpu_percent ?? 0,
+                ram: health.ram_percent ?? 0,
+                disk: health.disk_percent ?? 0
+            };
+
+            server.status = health.status;
                     const alerts = checkMetrics(metrics.cpu, metrics.ram, metrics.disk);
                     const isOffline = server.status !== 'online';
                     const hasMetrics = Number.isFinite(metrics.cpu) || Number.isFinite(metrics.ram) || Number.isFinite(metrics.disk);
@@ -792,85 +820,11 @@ HTML_TEMPLATE = """
             }
         });
 
-        document.addEventListener('click', async event => {
-            const button = event.target.closest('.history-btn');
-            if (!button) return;
+            document.addEventListener('DOMContentLoaded', () => {
+        loadDashboard();
 
-            const serverId = button.dataset.id;
-            document.getElementById('historyServerName').textContent = button.dataset.name;
-            document.getElementById('historyLoading').classList.remove('d-none');
-            document.getElementById('historyError').classList.add('d-none');
-            document.getElementById('historyEmpty').classList.add('d-none');
-            document.getElementById('historyChartWrapper').classList.add('d-none');
-            const modalElement = document.getElementById('historyModal');
-            bootstrap.Modal.getOrCreateInstance(modalElement).show();
-
-            const fetchAndRender = async () => {
-                try {
-                    const response = await fetch(`/health/history/${serverId}?limit=120`);
-                    if (response.status === 401) {
-                        window.location.href = '/login';
-                        return;
-                    }
-                    if (!response.ok) throw new Error('Failed to load server history');
-                    const rows = await response.json();
-                    document.getElementById('historyLoading').classList.add('d-none');
-                    if (!rows.length) {
-                        document.getElementById('historyEmpty').classList.remove('d-none');
-                        return;
-                    }
-
-                    document.getElementById('historyChartWrapper').classList.remove('d-none');
-                    const chartData = {
-                        labels: rows.map(row => formatEstTime(row.logged_at)),
-                        datasets: [
-                            { label: 'CPU %', data: rows.map(row => row.cpu_percent), borderColor: '#a855f7', tension: 0.3 },
-                            { label: 'RAM %', data: rows.map(row => row.ram_percent), borderColor: '#2dd4bf', tension: 0.3 },
-                            { label: 'Disk %', data: rows.map(row => row.disk_percent), borderColor: '#f59e0b', tension: 0.3 }
-                        ]
-                    };
-                    if (currentChart) currentChart.destroy();
-                    currentChart = new Chart(document.getElementById('historyChart'), {
-                        type: 'line', data: chartData,
-                        options: {
-                            responsive: true,
-                            animation: false,
-                            interaction: { mode: 'index', intersect: false },
-                            plugins: { legend: { labels: { color: '#dbe3f4' } } },
-                            scales: {
-                                y: { beginAtZero: true, max: 100, grid: { color: 'rgba(255,255,255,.07)' }, ticks: { color: '#9aa5bd' } },
-                                x: { grid: { display: false }, ticks: { color: '#9aa5bd', maxTicksLimit: 8 } }
-                            }
-                        }
-                    });
-                } catch (error) {
-                    document.getElementById('historyLoading').classList.add('d-none');
-                    document.getElementById('historyError').textContent = error.message;
-                    document.getElementById('historyError').classList.remove('d-none');
-                }
-            };
-
-            await fetchAndRender();
-            if (historyRefreshTimer) clearInterval(historyRefreshTimer);
-            historyRefreshTimer = window.setInterval(fetchAndRender, 30000);
-        });
-
-        document.getElementById('historyModal').addEventListener('hidden.bs.modal', () => {
-            if (historyRefreshTimer) {
-                clearInterval(historyRefreshTimer);
-                historyRefreshTimer = null;
-            }
-            if (currentChart) {
-                currentChart.destroy();
-                currentChart = null;
-            }
-        });
-
-        document.addEventListener('DOMContentLoaded', () => {
-            loadDashboard();
-            loadAdminSettings().catch(error => showFeedback('notifyFeedback', error.message, true));
-            window.setInterval(loadDashboard, %%HEALTH_REFRESH_INTERVAL_MS%%);
-        });
+        setInterval(loadDashboard, 5000);
+    });
     </script>
 </body>
 </html>
@@ -1015,6 +969,74 @@ class ServerCreate(BaseModel):
     hostname: str
     ssh_port: int = 22
 
+@app.get("/servers/{server_id}/health")
+def get_server_health(server_id: int, request: Request):
+    require_login(request)
+
+    connection = get_connection()
+    try:
+        cursor = connection.cursor(dictionary=True)
+        try:
+            cursor.execute(
+                "SELECT id, name, hostname, ssh_port "
+                "FROM servers WHERE id = %s",
+                (server_id,)
+            )
+            server = cursor.fetchone()
+        finally:
+            cursor.close()
+    finally:
+        connection.close()
+
+    if not server:
+        raise HTTPException(404, "Server not found")
+
+    # Windows host: collect local metrics
+    import socket
+
+    if server["hostname"].lower() == socket.gethostname().lower():
+        return {
+            "status": "online",
+            "cpu_percent": psutil.cpu_percent(interval=1),
+            "ram_percent": psutil.virtual_memory().percent,
+            "disk_percent": psutil.disk_usage(
+                os.path.abspath(os.sep)
+            ).percent
+        }
+
+    # Ubuntu VM: collect remote metrics through SSH
+    try:
+        # Select SSH username based on the remote server
+                # SSH usernames for each remote server
+        ssh_usernames = {
+            "192.168.56.101": "seed",
+            "192.168.56.10": "kali"
+        }
+
+        ssh_username = ssh_usernames.get(
+            server["hostname"]
+        )
+
+        if not ssh_username:
+            raise SSHMonitorError(
+                f"No SSH username configured for {server['hostname']}"
+            )
+
+        metrics = get_remote_health(
+            hostname=server["hostname"],
+            username=ssh_username,
+            port=server["ssh_port"]
+        )
+
+        return {"status": "online", **metrics}
+
+    except (SSHMonitorError, KeyError):
+        return {
+            "status": "offline",
+            "cpu_percent": None,
+            "ram_percent": None,
+            "disk_percent": None
+        }
 @app.post("/servers", status_code=201)
 def add_server(request: Request, server: ServerCreate):
     require_login(request)
