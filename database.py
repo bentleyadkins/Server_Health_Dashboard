@@ -6,14 +6,16 @@ def get_connection():
     """
     Make connection to Health_Dashboard database
     """
-    return mysql.connector.connect(
+    connection = mysql.connector.connect(
         # Change to 127.0.0.1 when testing/debugging
         # Change to localhost when in production with docker
-        host="127.0.0.1", 
+        host="127.0.0.1",
         user="user",
         password="root",
         database="health_dashboard"
     )
+    connection.time_zone = "+00:00"
+    return connection
 
 def create_tables():
     """
